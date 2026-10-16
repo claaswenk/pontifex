@@ -1,0 +1,60 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  code-and-config-checks:
+    name: Code and Secret Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint Containerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Containerfile
+
+  podman-build-test:
+    name: Podman Build and Test
+    needs: code-and-config-checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Podman version
+        run: podman --version
+
+      - name: Build container image
+        run: |
+          podman build -t my-podman-app:${{ github.sha }} .
+
+      - name: Enable Podman Socket
+        run: |
+          systemctl --user enable --now podman.socket
+          echo "DOCKER_HOST=unix:///${XDG_RUNTIME_DIR}/podman/podman.socket" >> $GITHUB_ENV
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        continue-on-error: true
+        with:
+          image-ref: 'my-podman-app:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Test container execution
+        run: |
+          podman run --rm my-podman-app:${{ github.sha }} python --version
