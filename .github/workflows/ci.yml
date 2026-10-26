@@ -2,59 +2,272 @@ name: CI Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main", "test/dast-**"]
+    tags: ["v*"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      run_dast:
+        description: "Run the DAST job (OWASP ZAP baseline scan)"
+        type: boolean
+        default: true
 
+# Least privilege by default. Individual jobs raise permissions only where needed
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  IMAGE_NAME: pontifex
+  IMAGE_TAR: pontifex-image.tar
+
+# All third-party actions are pinned to a full commit SHA
 jobs:
-  code-and-config-checks:
-    name: Code and Secret Security
-    runs-on: ubuntu-latest
+  # ---------------------------------------------------------------------------
+  # Code Security / Supply Chain: secrets, container lint
+  # ---------------------------------------------------------------------------
+  secrets-and-lint:
+    name: Secret scan and Containerfile lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+      - name: Gitleaks (secret scanning, full history)
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Lint Containerfile
-        uses: hadolint/hadolint-action@v3.1.0
+      - name: Hadolint (Containerfile lint)
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: Containerfile
+          failure-threshold: warning
 
-  podman-build-test:
-    name: Podman Build and Test
-    needs: code-and-config-checks
-    runs-on: ubuntu-latest
+  # ---------------------------------------------------------------------------
+  # Code Security: SAST. Findings >= MEDIUM fail the job.
+  # ---------------------------------------------------------------------------
+  sast:
+    name: SAST (Bandit)
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Check Podman version
-        run: podman --version
-
-      - name: Build container image
-        run: |
-          podman build -t my-podman-app:${{ github.sha }} .
-
-      - name: Enable Podman Socket
-        run: |
-          systemctl --user enable --now podman.socket
-          echo "DOCKER_HOST=unix:///${XDG_RUNTIME_DIR}/podman/podman.socket" >> $GITHUB_ENV
-
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@master
-        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          image-ref: 'my-podman-app:${{ github.sha }}'
-          format: 'table'
-          exit-code: '1'
-          severity: 'CRITICAL,HIGH'
+          persist-credentials: false
 
-      - name: Test container execution
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Install Bandit (pinned)
+        run: python -m pip install --no-cache-dir bandit==1.9.4
+
+      - name: Run Bandit (gate - fails on MEDIUM or higher)
         run: |
-          podman run --rm my-podman-app:${{ github.sha }} python --version
+          bandit -r src -c .bandit.yaml -ll --format json --output bandit-report.json --exit-zero
+          bandit -r src -c .bandit.yaml -ll
+
+      - name: Upload SAST report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sast-report
+          path: bandit-report.json
+
+  # ---------------------------------------------------------------------------
+  # Supply Chain: known vulnerabilities in dependencies
+  # ---------------------------------------------------------------------------
+  dependency-audit:
+    name: Dependency vulnerability audit (pip-audit)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit (pinned)
+        run: python -m pip install --no-cache-dir pip-audit==2.10.1
+
+      - name: Audit requirements.txt (gate - fails on any known vulnerability)
+        run: |
+          pip-audit -r requirements.txt --no-deps --disable-pip --format json --output pip-audit-report.json || true
+          pip-audit -r requirements.txt --no-deps --disable-pip
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-audit-report
+          path: pip-audit-report.json
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Build: image + SBOM + image scan + smoke test. The tested image is the
+  # exact artifact that is later published
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build, scan and smoke-test image
+    needs: [secrets-and-lint, sast, dependency-audit]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build container image (Podman, docker format keeps HEALTHCHECK)
+        run: |
+          podman --version
+          podman build --format docker \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t "${IMAGE_NAME}:${GITHUB_SHA}" -f Containerfile .
+
+      - name: Export image as build artifact
+        run: podman save --format docker-archive -o "${IMAGE_TAR}" "${IMAGE_NAME}:${GITHUB_SHA}"
+
+      - name: Generate SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          input: ${{ env.IMAGE_TAR }}
+          format: cyclonedx
+          output: sbom.cdx.json
+
+      - name: Scan image for vulnerabilities (gate - fails on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          input: ${{ env.IMAGE_TAR }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Verify container runs as non-root
+        run: |
+          uid="$(podman run --rm --entrypoint id "${IMAGE_NAME}:${GITHUB_SHA}" -u)"
+          echo "container uid: ${uid}"
+          test "${uid}" != "0"
+
+      - name: Smoke test (start container, check HTTP and HEALTHCHECK)
+        run: |
+          podman run -d --name app -p 127.0.0.1:8080:8080 "${IMAGE_NAME}:${GITHUB_SHA}"
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8080/ ; then echo; break; fi
+            if [ "$i" = 20 ]; then podman logs app; exit 1; fi
+            sleep 1
+          done
+          podman healthcheck run app
+          podman stop app
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: container-image
+          path: ${{ env.IMAGE_TAR }}
+          retention-days: 7
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  # ---------------------------------------------------------------------------
+  # Dynamic testing: DAST (OWASP ZAP baseline). On demand or on test/dast-*
+  # branches only, so intentionally insecure code never reaches main
+  # ---------------------------------------------------------------------------
+  dast:
+    name: DAST (OWASP ZAP baseline)
+    needs: build
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_dast) ||
+      startsWith(github.ref, 'refs/heads/test/dast-')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download image artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: container-image
+
+      - name: Start application under test
+        run: |
+          podman load -i "${IMAGE_TAR}"
+          podman run -d --name app -p 127.0.0.1:8080:8080 "${IMAGE_NAME}:${GITHUB_SHA}"
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8080/ >/dev/null; then break; fi
+            if [ "$i" = 20 ]; then podman logs app; exit 1; fi
+            sleep 1
+          done
+
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        with:
+          target: http://127.0.0.1:8080
+          docker_name: ghcr.io/zaproxy/zaproxy@sha256:030d3df57735dacbb83464854758e674dd9ad01d79d12a129a8e58b1fd384238 # stable
+          fail_action: true
+          allow_issue_writing: false
+          artifact_name: dast-report
+
+  # ---------------------------------------------------------------------------
+  # Publish: only from main or a version tag, only after every gate passed,
+  # and only the image that was built and tested above
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish image to GHCR
+    needs: build
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: container-image
+
+      - name: Load tested image
+        run: podman load -i "${IMAGE_TAR}"
+
+      - name: Log in to GHCR (short-lived GITHUB_TOKEN, no stored secrets)
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: printf '%s' "${REGISTRY_TOKEN}" | podman login ghcr.io -u "${REGISTRY_USER}" --password-stdin
+
+      - name: Tag and push
+        run: |
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tags=("sha-${GITHUB_SHA}")
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tags+=("${GITHUB_REF_NAME}"); fi
+          for t in "${tags[@]}"; do
+            podman tag "${IMAGE_NAME}:${GITHUB_SHA}" "${repo}:${t}"
+            podman push --format v2s2 --digestfile digest.txt "${repo}:${t}"
+          done
+          echo "Published ${repo}@$(cat digest.txt)" | tee -a "${GITHUB_STEP_SUMMARY}"

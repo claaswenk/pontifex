@@ -1,0 +1,8 @@
+exclude_dirs:
+  - tests
+skips:
+  # B104 (bind to 0.0.0.0): the app runs in a container and must listen on all
+  # interfaces of its own network namespace. Exposure is controlled by the
+  # port mapping (podman run -p 127.0.0.1:8080:8080), not by the bind address.
+  # Re-evaluate if the app is ever run outside a container.
+  - B104
