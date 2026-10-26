@@ -1,7 +1,8 @@
 # .pre-commit-config.yaml
+# Revisions are pinned to full commit SHAs.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -9,13 +10,21 @@ repos:
       - id: check-added-large-files
 
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.2
+    rev: 6eaad039603a4de39fddd1cf5f727391efe9974e # v8.30.0
     hooks:
       - id: gitleaks
 
   - repo: https://github.com/hadolint/hadolint
-    rev: v2.12.0
+    rev: b3555ba9c2bfd9401e79f2f0da68dd1ae38e10c7 # v2.12.0
     hooks:
       - id: hadolint-docker
         name: Lint Containerfile
         files: ^Containerfile$
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 92ae8b82fb422a639f0ed8d99e96cea769594e08 # 1.9.4
+    hooks:
+      - id: bandit
+        name: SAST (bandit)
+        args: ["-c", ".bandit.yaml", "-ll"]
+        files: ^src/
