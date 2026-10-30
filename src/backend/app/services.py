@@ -56,15 +56,15 @@ def wake_on_lan(mac_address, ip_address, port):
             mac_cleaned = _clean_mac_address(mac_address)
             valid_ip_address = _evaluate_ip_address(ip_address)
             valid_port = _validate_port_number(port)
-        except (ValueError, TypeError) as e:
-            return {"success": False, "error": str(e)}
+        except (ValueError, TypeError):
+            return {"success": False, "error": "Invalid wake-on-LAN request parameters."}
 
         payload = _generate_magic_packet(mac_cleaned)
 
         try:
             _send_udp_broadcast(payload, valid_ip_address, valid_port)
-        except OSError as e:
-            return {"success": False, "error": f"Cannot send broadcast to IP address: {valid_ip_address}"}
+        except OSError:
+            return {"success": False, "error": "Failed to send wake-on-LAN packet."}
 
         if return_dest is True:
             return {"success": True, "ip": valid_ip_address, "port": str(valid_port)}
