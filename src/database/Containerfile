@@ -1,0 +1,20 @@
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
+    && pip uninstall -y setuptools wheel
+
+COPY src/database/db_src/ ./db_src/
+
+RUN useradd --system --no-create-home --uid 10001 app
+USER 10001
+
+EXPOSE 13110
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:13110/', timeout=2)"]
+
+CMD ["python", "db_src/database_api.py"]
