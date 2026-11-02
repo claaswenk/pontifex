@@ -11,10 +11,16 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHashError
 from flask import request, jsonify, g
 
-_ACCESS_TOKEN_TTL = datetime.timedelta(minutes=5) # 5 minutes JWT Tokens
+_ACCESS_TOKEN_TTL = datetime.timedelta(minutes=5)  # 5-minute JWT TTL
 _JWT_ALGORITHM = "HS256"
 _password_hasher = PasswordHasher()
+
+# Keyed by refresh_token → { username, pw_hash, role }
 _users: dict[str, dict] = dict()
+
+# Flipped to True after the first (and only) call to create-user/admin.
+# Once consumed, the bootstrap endpoint returns 410 Gone.
+_bootstrap_consumed: bool = False
 
 def _jwt_secret() -> str:
     """
@@ -107,6 +113,21 @@ def exchange_refresh_token(refresh_token: str) -> str | None:
     return issue_access_token(user["username"], user["role"])
 
 
+def revoke_user(refresh_token: str) -> None:
+    """
+    Permanently delete a user record identified by their refresh_token.
+    """
+    _users.pop(refresh_token, None)
+
+
+def find_refresh_token_by_username(username: str) -> str | None:
+    """Return the refresh_token for *username*, or None if not found."""
+    for rt, record in _users.items():
+        if record["username"] == username:
+            return rt
+    return None
+
+
 def _username_exists(username: str) -> bool:
     return any(u["username"] == username for u in _users.values())
 
@@ -152,9 +173,17 @@ def require_container_key(f):
 def require_initial_api_key(f):
     """
     Protects the admin-bootstrap endpoint.
+
+    The endpoint is callable exactly once. After the first admin account has
+    been created, _bootstrap_consumed is set to True and every subsequent
+    call returns 410 Gone — regardless of which key is presented.
     """
     @wraps(f)
     def decorated(*args, **kwargs):
+        global _bootstrap_consumed
+        if _bootstrap_consumed:
+            return jsonify({"error": "Bootstrap already consumed. Admin account was already created."}), 410
+
         initial_key = os.environ.get("INITIAL_API_KEY", "")
         if not initial_key:
             return jsonify({"error": "Bootstrap disabled: INITIAL_API_KEY not set."}), 503
@@ -163,7 +192,12 @@ def require_initial_api_key(f):
         if not token or not secrets.compare_digest(token, initial_key):
             return jsonify({"error": "Unauthorized."}), 401
 
-        return f(*args, **kwargs)
+        response = f(*args, **kwargs)
+        # Mark as consumed only on a successful creation (2xx status)
+        status = response[1] if isinstance(response, tuple) else 200
+        if 200 <= status < 300:
+            _bootstrap_consumed = True
+        return response
     return decorated
 
 
