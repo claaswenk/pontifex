@@ -72,7 +72,8 @@ def create_admin_user():
     try:
         refresh_token, access_token = create_user(username, password, role="admin")
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 409
+        api_bp.logger.warning("Admin user creation failed: %s", exc)
+        return jsonify({"error": "Unable to create admin user."}), 409
 
     return jsonify({
         "refresh_token": refresh_token,
