@@ -1,0 +1,97 @@
+# =============================================================================
+# Pontifex – Docker Compose
+# =============================================================================
+# Usage:
+#   cp .env.example .env          # fill in all secrets
+#   docker compose up --build
+#
+# One service:
+#   backend   – Flask serves both the REST API (/api/*) and the frontend SPA
+#               from src/frontend/.  SQLite DB is embedded in the same container.
+#
+# Frontend build:
+#   Place your compiled frontend assets in src/frontend/ before building the
+#   container image (e.g. output of `npm run build`). Flask serves them as
+#   static files; any unknown route falls back to index.html for SPA routing.
+#
+# Database:
+#   SQLite runs inside the backend container. The database file is stored in
+#   the named volume sqlite_data, mounted at /app/data/pontifex.db.
+#   Set DB_PATH in your .env to override the default path.
+#
+# TLS:
+#   Place your certificate and key in ./certs/tls.crt and ./certs/tls.key.
+#   They are mounted read-only into the container.
+#   Set TLS_CERT_PATH / TLS_KEY_PATH in your .env if you use different paths.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Backend – Flask API + Frontend (SQLite embedded)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: src/backend/Containerfile
+    container_name: pontifex-backend
+    restart: unless-stopped
+    ports:
+      - "${PORT:-7337}:${PORT:-7337}"
+    environment:
+      # One-time bootstrap key – unique per container deployment
+      INITIAL_API_KEY: ${INITIAL_API_KEY}
+      # Inter-container identity key sent on every cross-service request
+      CONTAINER_API_KEY: ${CONTAINER_API_KEY}
+      # HMAC secret for signing JWT access tokens
+      JWT_SECRET: ${JWT_SECRET}
+      # TLS certificate paths (mounted via tls_certs volume below)
+      TLS_CERT_PATH: ${TLS_CERT_PATH:-/run/secrets/tls.crt}
+      TLS_KEY_PATH: ${TLS_KEY_PATH:-/run/secrets/tls.key}
+      # Server port
+      PORT: ${PORT:-7337}
+      # SQLite database file path (inside the container)
+      DB_PATH: ${DB_PATH:-/app/data/pontifex.db}
+    volumes:
+      - tls_certs:/run/secrets:ro
+      - sqlite_data:/app/data
+    networks:
+      - pontifex-net
+    healthcheck:
+      test: >
+        python -c "import urllib.request, ssl;
+        urllib.request.urlopen('https://127.0.0.1:${PORT:-7337}/api/health',
+        timeout=2, context=ssl._create_unverified_context())"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+# =============================================================================
+# Named volumes
+# =============================================================================
+volumes:
+  # SQLite database file – persists across container restarts
+  sqlite_data:
+    driver: local
+
+  # TLS certificates – bind-mount ./certs/ so the backend can find them.
+  # Populate by placing tls.crt and tls.key in a ./certs/ directory, then swap:
+  #
+  #   tls_certs:
+  #     driver: local
+  #     driver_opts:
+  #       type: none
+  #       o: bind
+  #       device: ${PWD}/certs
+  #
+  # Using a plain named volume here as a safe default.
+  tls_certs:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  pontifex-net:
+    driver: bridge
