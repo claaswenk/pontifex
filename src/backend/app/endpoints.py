@@ -1,4 +1,13 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
+
+from app.auth import (
+    create_user,
+    exchange_refresh_token,
+    find_refresh_token_by_username,
+    require_initial_api_key,
+    require_role,
+    revoke_user,
+)
 from app.services import process_pontifex_logic, wake_on_lan as wol_service
 
 api_bp = Blueprint("api", __name__)
@@ -42,8 +51,6 @@ def process_data():
     result = process_pontifex_logic()
     return jsonify({"success": True, "data": result}), 200
 
-<<<<<<< HEAD
-=======
 
 # ---------------------------------------------------------------------------
 # POST /api/create-user/admin
@@ -115,7 +122,7 @@ def create_service_user():
 # ---------------------------------------------------------------------------
 # PUT /api/devices/wol
 # ---------------------------------------------------------------------------
->>>>>>> 9c4bee5 (Potential fix for pull request finding 'CodeQL / Information exposure through an exception')
+
 @api_bp.route('/devices/wol', methods=['PUT'])
 def wake_on_lan():
     data = request.get_json()
