@@ -174,11 +174,6 @@ def require_initial_api_key(f):
 def require_role(*roles: str):
     """
     Verify the JWT access token and enforce role membership.
-
-    Also validates the ``X-Container-Key`` header so every protected endpoint
-    automatically requires both credentials.
-
-    Sets ``flask.g.current_user`` to the decoded JWT payload on success.
     """
     def decorator(f):
         @wraps(f)
