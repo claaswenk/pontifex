@@ -21,8 +21,16 @@ def create_app():
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
     def serve_frontend(path):
-        if path and os.path.isfile(os.path.join(frontend_dir, path)):
-            return send_from_directory(frontend_dir, path)
+        safe_frontend_root = os.path.abspath(frontend_dir)
+        if path:
+            requested_path = os.path.abspath(
+                os.path.normpath(os.path.join(safe_frontend_root, path))
+            )
+            if (
+                os.path.commonpath([safe_frontend_root, requested_path]) == safe_frontend_root
+                and os.path.isfile(requested_path)
+            ):
+                return send_from_directory(frontend_dir, path)
         return send_from_directory(frontend_dir, "index.html")
 
     return app
