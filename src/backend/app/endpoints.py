@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request, request, g
+from flask import Blueprint, jsonify, request, g
 
 from app.auth import (
     create_user,
