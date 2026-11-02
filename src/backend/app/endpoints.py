@@ -102,8 +102,8 @@ def create_service_user():
 
     try:
         refresh_token, access_token = create_user(username, password, role="user")
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 409
+    except ValueError:
+        return jsonify({"error": "Unable to create user with the provided input."}), 409
 
     # The admin account is a one-time bootstrapper. Once the service user
     admin_username = g.current_user["sub"]
