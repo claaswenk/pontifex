@@ -1,3 +1,5 @@
+import logging
+
 from flask import Blueprint, jsonify, request, request, g
 
 from app.auth import (
@@ -11,6 +13,7 @@ from app.auth import (
 from app.services import process_pontifex_logic, wake_on_lan as wol_service
 
 api_bp = Blueprint("api", __name__)
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -71,8 +74,9 @@ def create_admin_user():
 
     try:
         refresh_token, access_token = create_user(username, password, role="admin")
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 409
+    except ValueError:
+        logger.exception("Failed to create admin user")
+        return jsonify({"error": "Unable to create admin user."}), 409
 
     return jsonify({
         "refresh_token": refresh_token,
