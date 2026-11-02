@@ -38,8 +38,8 @@ def wake_on_lan(mac_address, ip_address, port):
     def _send_udp_broadcast(payload, ip_address, port):
 
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.sendto(payload, (ip_address, port))
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.sendto(payload, (ip_address, port))
 
     def _validate_port_number(port_number):
 
