@@ -1,10 +1,12 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 
 from app.auth import (
     create_user,
     exchange_refresh_token,
+    find_refresh_token_by_username,
     require_initial_api_key,
     require_role,
+    revoke_user,
 )
 from app.services import process_pontifex_logic
 
@@ -101,6 +103,12 @@ def create_service_user():
         refresh_token, access_token = create_user(username, password, role="user")
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
+
+    # The admin account is a one-time bootstrapper. Once the service user
+    admin_username = g.current_user["sub"]
+    admin_rt = find_refresh_token_by_username(admin_username)
+    if admin_rt:
+        revoke_user(admin_rt)
 
     return jsonify({
         "refresh_token": refresh_token,
