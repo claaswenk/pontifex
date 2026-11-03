@@ -7,23 +7,16 @@ CERT_FILE="$CERT_DIR/tls.crt"
 KEY_FILE="$CERT_DIR/tls.key"
 
 # --------------------------------------------------
-# Prepare persistent volume permissions
+# Check permissions
 # --------------------------------------------------
 
-if [ "$(id -u)" -eq 0 ]; then
-    echo "[INIT] Preparing volume permissions..."
+echo "[INIT] Running as UID $(id -u)..."
 
-    mkdir -p "$CERT_DIR" /app/data
+mkdir -p "$CERT_DIR" /app/data
 
-    chown -R 10001:10001 "$CERT_DIR" /app/data
-
-    echo "[INIT] Dropping root privileges..."
-
-    exec setpriv \
-        --reuid=10001 \
-        --regid=10001 \
-        --clear-groups \
-        "$0" "$@"
+if [ ! -w "$CERT_DIR" ] || [ ! -w /app/data ]; then
+    echo "[ERROR] Required directories are not writable."
+    exit 1
 fi
 
 # --------------------------------------------------
@@ -31,8 +24,6 @@ fi
 # --------------------------------------------------
 
 echo "[TLS] Checking certificates..."
-
-mkdir -p "$CERT_DIR"
 
 if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
 

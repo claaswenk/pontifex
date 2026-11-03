@@ -20,6 +20,8 @@ COPY src/backend/entrypoint.sh /entrypoint.sh
 RUN groupadd --system --gid 10001 app \
     && useradd --system --no-create-home --uid 10001 --gid 10001 app \
     && mkdir -p /app/certs /app/data \
+    && chown -R 10001:10001 /app/certs /app/data \
+    && chmod 700 /app/certs \
     && chmod +x /entrypoint.sh
 
 ENV PORT=7337 \
@@ -27,8 +29,9 @@ ENV PORT=7337 \
     TLS_KEY_PATH=/app/certs/tls.key \
     DB_PATH=/app/data/pontifex.db
 
+USER 10001:10001
+
 EXPOSE 7337
 
 ENTRYPOINT ["/entrypoint.sh"]
-
 CMD ["python", "run.py"]
