@@ -28,6 +28,37 @@ env:
 # All third-party actions are pinned to a full commit SHA
 jobs:
   # ---------------------------------------------------------------------------
+  # Branch protection: only dev -> main pull requests are allowed
+  # ---------------------------------------------------------------------------
+  dev-to-main-policy:
+    name: Enforce dev-to-main policy
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Verify source branch
+        env:
+          SOURCE_BRANCH: ${{ github.event.pull_request.head.ref }}
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "${SOURCE_BRANCH}" != "dev" ]; then
+            echo "::error::Only pull requests from dev into main are allowed."
+            exit 1
+          fi
+
+          if [ "${SOURCE_REPOSITORY}" != "${TARGET_REPOSITORY}" ]; then
+            echo "::error::Pull requests must originate from the same repository."
+            exit 1
+          fi
+
+          echo "Valid dev -> main pull request."
+
+  # ---------------------------------------------------------------------------
   # Code Security / Supply Chain: secrets, container lint
   # ---------------------------------------------------------------------------
   secrets-and-lint:
