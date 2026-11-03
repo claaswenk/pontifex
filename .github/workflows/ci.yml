@@ -133,13 +133,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build container image (Podman, docker format keeps HEALTHCHECK)
+      - name: Build container image via Docker Compose
         run: |
-          podman --version
-          podman build --format docker \
-            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            -t "${IMAGE_NAME}:${GITHUB_SHA}" -f Containerfile .
+          podman compose version
+          podman compose build --format docker
+          podman tag localhost/pontifex_backend:latest "${IMAGE_NAME}:${GITHUB_SHA}"
 
       - name: Export image as build artifact
         run: podman save --format docker-archive -o "${IMAGE_TAR}" "${IMAGE_NAME}:${GITHUB_SHA}"
