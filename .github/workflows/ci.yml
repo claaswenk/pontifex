@@ -51,7 +51,7 @@ jobs:
       - name: Hadolint (Containerfile lint)
         uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
-          dockerfile: Containerfile
+          dockerfile: src/backend/Containerfile
           failure-threshold: warning
 
   # ---------------------------------------------------------------------------
