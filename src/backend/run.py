@@ -37,8 +37,8 @@ def _build_tls_context() -> ssl.SSLContext:
             listing = sorted(os.listdir(parent)) if os.path.isdir(parent) else "directory missing"
             log.error(
                 "%s=%s does not exist or is not a file (contents of %s: %s). "
-                "Paths must be valid INSIDE the container; mount the host "
-                "cert directory to /run/secrets.",
+                "Paths must be valid INSIDE the container; certificates "
+                "are stored in the persistent /app/certs volume.",
                 name, path, parent, listing,
             )
             sys.exit(1)
