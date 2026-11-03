@@ -218,3 +218,9 @@ rockyou.txt
 rsa-module
 models/
 data/cache/
+
+# TLS material
+certs/
+*.pem
+*.key
+*.crt
