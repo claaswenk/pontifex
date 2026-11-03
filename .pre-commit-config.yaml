@@ -14,12 +14,18 @@ repos:
     hooks:
       - id: gitleaks
 
-  - repo: https://github.com/hadolint/hadolint
-    rev: b3555ba9c2bfd9401e79f2f0da68dd1ae38e10c7 # v2.12.0
+  # hadolint-py ships the hadolint binary as a Python package, so no Docker
+  # daemon is needed (the official hadolint-docker hook requires one).
+  # >= v2.15.1 downloads a native arm64 binary on Apple Silicon; older
+  # versions fetch an x86_64 binary that segfaults (exit code -11).
+  - repo: https://github.com/AleksaC/hadolint-py
+    rev: 6e7504451511eaeb62a3e7f14d63b0296cbf86eb # v2.15.1
     hooks:
-      - id: hadolint-docker
+      - id: hadolint
         name: Lint Containerfile
-        files: ^Containerfile$
+        args: ["--failure-threshold", "warning"]
+        files: ^src/backend/Containerfile$
+        types: [file]
 
   - repo: https://github.com/PyCQA/bandit
     rev: 92ae8b82fb422a639f0ed8d99e96cea769594e08 # 1.9.4

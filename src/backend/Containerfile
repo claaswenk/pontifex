@@ -2,15 +2,24 @@ FROM python:3.11-slim@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78a
 
 WORKDIR /app
 
-COPY ../../requirements.txt .
+COPY requirements.txt .
 
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
     && pip uninstall -y setuptools wheel
 
-COPY . .
+COPY src/backend/run.py .
+COPY src/backend/app/ ./app/
 
 RUN useradd --system --no-create-home --uid 10001 app
 USER 10001
+
+# Runtime defaults. Override at `run` time (-e / compose environment / .env).
+# These are paths INSIDE the container, the certificate files themselves are
+# mounted at /run/secrets and never baked into the image.
+ENV PORT=7337 \
+    TLS_CERT_PATH=/run/secrets/tls.crt \
+    TLS_KEY_PATH=/run/secrets/tls.key \
+    DB_PATH=/app/data/pontifex.db
 
 EXPOSE 7337
 
