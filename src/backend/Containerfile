@@ -13,6 +13,14 @@ COPY src/backend/app/ ./app/
 RUN useradd --system --no-create-home --uid 10001 app
 USER 10001
 
+# Runtime defaults. Override at `run` time (-e / compose environment / .env).
+# These are paths INSIDE the container, the certificate files themselves are
+# mounted at /run/secrets and never baked into the image.
+ENV PORT=7337 \
+    TLS_CERT_PATH=/run/secrets/tls.crt \
+    TLS_KEY_PATH=/run/secrets/tls.key \
+    DB_PATH=/app/data/pontifex.db
+
 EXPOSE 7337
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
