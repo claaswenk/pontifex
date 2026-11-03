@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
 
 COPY src/backend/run.py .
 COPY src/backend/app/ ./app/
+COPY src/shared/auth.py ./app/
 
 RUN useradd --system --no-create-home --uid 10001 app
 USER 10001

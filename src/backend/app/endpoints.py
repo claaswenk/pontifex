@@ -1,6 +1,7 @@
 import logging
 
 from flask import Blueprint, jsonify, request, g
+# Will be imported with docker image
 from app.auth import (
     create_user,
     exchange_refresh_token,
