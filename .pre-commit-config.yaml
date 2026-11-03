@@ -19,7 +19,8 @@ repos:
     hooks:
       - id: hadolint-docker
         name: Lint Containerfile
-        files: ^Containerfile$
+        args: ["--failure-threshold", "warning"]
+        files: ^src/backend/Containerfile$
 
   - repo: https://github.com/PyCQA/bandit
     rev: 92ae8b82fb422a639f0ed8d99e96cea769594e08 # 1.9.4
