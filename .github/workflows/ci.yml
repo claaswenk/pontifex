@@ -136,7 +136,7 @@ jobs:
       - name: Build container image via Docker Compose
         run: |
           podman compose version
-          podman compose build --format docker
+          podman compose build
           podman tag localhost/pontifex_backend:latest "${IMAGE_NAME}:${GITHUB_SHA}"
 
       - name: Export image as build artifact
