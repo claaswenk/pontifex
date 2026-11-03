@@ -2,12 +2,13 @@ FROM python:3.11-slim@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78a
 
 WORKDIR /app
 
-COPY ../../requirements.txt .
+COPY requirements.txt .
 
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
     && pip uninstall -y setuptools wheel
 
-COPY . .
+COPY src/backend/run.py .
+COPY src/backend/app/ ./app/
 
 RUN useradd --system --no-create-home --uid 10001 app
 USER 10001
@@ -15,6 +16,6 @@ USER 10001
 EXPOSE 7337
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD ["python", "-c", "import urllib.request, ssl; urllib.request.urlopen('https://127.0.0.1:7337/api/health', timeout=2, context=ssl._create_unverified_context())"]
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7337/api/health', timeout=2)"]
 
 CMD ["python", "run.py"]
