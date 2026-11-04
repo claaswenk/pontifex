@@ -16,19 +16,18 @@ RUN apt-get update \
 COPY src/backend/run.py .
 COPY src/backend/app/ ./app/
 COPY src/shared/ ./shared/
-COPY src/backend/entrypoint.sh /entrypoint.sh
+COPY src/shared/entrypoint.sh /entrypoint.sh
 
 RUN groupadd --system --gid 10001 app \
     && useradd --system --no-create-home --uid 10001 --gid 10001 app \
-    && mkdir -p /app/certs /app/data \
-    && chown -R 10001:10001 /app/certs /app/data \
+    && mkdir -p /app/certs \
+    && chown -R 10001:10001 /app/certs \
     && chmod 700 /app/certs \
     && chmod +x /entrypoint.sh
 
 ENV PORT=7337 \
     TLS_CERT_PATH=/app/certs/tls.crt \
-    TLS_KEY_PATH=/app/certs/tls.key \
-    DB_PATH=/app/data/pontifex.db
+    TLS_KEY_PATH=/app/certs/tls.key
 
 USER 10001:10001
 
