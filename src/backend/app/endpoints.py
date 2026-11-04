@@ -1,7 +1,6 @@
 import logging
 
-from flask import Blueprint, jsonify, request, request, g
-
+from flask import Blueprint, jsonify, request, g
 from app.auth import (
     create_user,
     exchange_refresh_token,
@@ -125,7 +124,6 @@ def create_service_user():
 # ---------------------------------------------------------------------------
 # PUT /api/devices/wol
 # ---------------------------------------------------------------------------
-
 @api_bp.route('/devices/wol', methods=['PUT'])
 def wake_on_lan():
     data = request.get_json()
