@@ -1,9 +1,9 @@
 import os
-from flask import Flask, send_from_directory
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-def create_app():
+def create_app(database=None):
     # Resolve the frontend directory relative to this file's location so it
     # works both inside the container (/app/app/) and in local dev.
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,8 +16,20 @@ def create_app():
     )
     CORS(app)
 
-    from app.endpoints import api_bp
-    app.register_blueprint(api_bp, url_prefix='/api')
+    from app.auth import BackendAuth
+    from app.database_client import DatabaseClient, DatabaseUnavailableError
+    from app.endpoints import create_api_blueprint
+
+    auth = BackendAuth(database or DatabaseClient())
+    auth.validate_config()
+    app.extensions["auth"] = auth
+    app.register_blueprint(create_api_blueprint(auth), url_prefix='/api')
+
+    # Fail closed: if the database cannot be reached, nobody is let in.
+    @app.errorhandler(DatabaseUnavailableError)
+    def database_unavailable(_exc):
+        app.logger.error("Database container unavailable")
+        return jsonify({"error": "Service temporarily unavailable."}), 503
 
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
