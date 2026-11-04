@@ -26,9 +26,6 @@ class DB_Interface():
     def initialize_db(self):
         self.__cursor.executescript(self.__schema_path)
 
-    def sanitize_input(self):
-        pass
-
     def select(self):
         pass
 
