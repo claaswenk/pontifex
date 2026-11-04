@@ -1,9 +1,5 @@
 """
 Frontend container authentication.
-
-The frontend never creates or stores accounts. It only validates the
-access tokens that the backend issued (same JWT_SECRET), so it needs no
-user store
 """
 
 from shared.auth import BaseAuth
