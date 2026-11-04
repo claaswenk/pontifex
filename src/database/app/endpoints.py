@@ -24,12 +24,22 @@ def health_check():
     return jsonify({"status": "healthy", "service": "pontifex-database"}), 200
 
 # ---------------------------------------------------------------------------
+# Setup
+# ---------------------------------------------------------------------------
+
+@api_db.route("/setup", methods=["POST"])
+@require_role("admin")
+def setup():
+    result = 0
+    return jsonify({"success": True, "data": result}), 200
+
+# ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------
 
 @api_db.route("/insert", methods=["POST"])
 @require_role("admin")
-def process_data():
+def insert():
     result = 0
     return jsonify({"success": True, "data": result}), 200
 
@@ -39,7 +49,7 @@ def process_data():
 
 @api_db.route("/update", methods=["POST"])
 @require_role("admin")
-def process_data():
+def update():
     result = 0
     return jsonify({"success": True, "data": result}), 200
 
@@ -49,7 +59,7 @@ def process_data():
 
 @api_db.route("/delete", methods=["POST"])
 @require_role("admin")
-def process_data():
+def delete():
     result = 0
     return jsonify({"success": True, "data": result}), 200
 
@@ -59,6 +69,6 @@ def process_data():
 
 @api_db.route("/select", methods=["POST"])
 @require_role("admin", "user")
-def process_data():
+def delete():
     result = 0
     return jsonify({"success": True, "data": result}), 200
