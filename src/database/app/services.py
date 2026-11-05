@@ -1,5 +1,6 @@
 from sqlite3 import Connection
 
+import hashlib
 import logging
 import sqlite3
 import os
@@ -12,6 +13,7 @@ class DB_Interface():
         self.__connection = self.__connect()
         self.__cursor = self.__connection.cursor()
         self.__schema_path = "schema.sql"
+        self.__salt_length = 16
 
     def __connect(self) -> Connection:
         self.logger.log("Trying to connect to DB")
@@ -23,17 +25,26 @@ class DB_Interface():
         con = sqlite3.connect(self.db_path)
         return con
 
+    def __gen_salt(self) -> bytes:
+        return os.urandom(self.__salt_length)
+
+    def __hash_password_initial(self, password: str) -> str:
+        salt = self.__gen_salt()
+        hash = hashlib.sha256(salt + password.encode(encoding='utf-8')).digest()
+        to_return = salt.hex() + hash.hex()
+        return to_return
+
+    def __verify_password(self, password_input: str, password_db: str) -> bool:
+        salt = password_db[:self.__salt_length]
+        password_db_hash = password_db[self.__salt_length:]
+
+        password_input_hash = hashlib.sha256(salt, password_input.encode(encoding='utf-8')).digest()
+        if password_db_hash == password_input_hash:
+            return True
+        return False
+
     def initialize_db(self):
         self.__cursor.executescript(self.__schema_path)
 
-    def select(self):
-        pass
-
-    def delete(self):
-        pass
-
-    def update(self):
-        pass
-
-    def insert(self):
-        pass
+    def create_user(self, username, password):
+        self.__cursor.execute("INSERT INTO users (username, password) VALUES(?, ?)", username, password)
