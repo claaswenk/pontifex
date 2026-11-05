@@ -9,6 +9,8 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+       apt=3.0.4 \
+       libapt-pkg7.0=3.0.4 \
        openssl=3.5.7-1~deb13u3 \
        util-linux=2.41.5-0+deb13u1 \
     && rm -rf /var/lib/apt/lists/*
