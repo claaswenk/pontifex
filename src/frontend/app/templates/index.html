@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pontifex</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="card">
+    <h1>Pontifex</h1>
+    <p class="status">UI is online</p>
+    <dl>
+      <dt>Service</dt>
+      <dd>pontifex-frontend</dd>
+      <dt>Server time</dt>
+      <dd>{{ server_time }}</dd>
+    </dl>
+  </main>
+</body>
+</html>
