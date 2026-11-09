@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import sys
 import unittest
@@ -7,12 +8,21 @@ sys.path[:0] = [os.path.join(ROOT, "src"), os.path.join(ROOT, "src", "backend")]
 
 from shared.auth import BaseAuth  # noqa: E402
 from shared.errors import BootstrapConsumedError  # noqa: E402
-from frontend.auth import FrontendAuth  # noqa: E402
 from database.auth import DatabaseAuth  # noqa: E402
 from app.database_client import DatabaseClient, DatabaseUnavailableError  # noqa: E402
 
-CK = {"X-Container-Key": "container-key"}
+# The frontend's package is also called "app", so load its auth module by path.
+_spec = importlib.util.spec_from_file_location(
+    "frontend_auth", os.path.join(ROOT, "src", "frontend", "app", "auth.py"))
+_frontend_auth = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_frontend_auth)
+FrontendAuth = _frontend_auth.FrontendAuth
+
 PW = "a-long-enough-password"
+SECRETS = {
+    "BACKEND_FRONTEND_SECRET": "f" * 40,
+    "BACKEND_DATABASE_SECRET": "d" * 40,
+}
 
 
 class FakeDatabase:
@@ -71,7 +81,7 @@ class FakeDatabase:
 class BackendAuthFlowTest(unittest.TestCase):
     def setUp(self):
         os.environ.update(
-            CONTAINER_API_KEY="container-key",
+            SECRETS,
             JWT_SECRET="test-jwt-secret-with-at-least-32-bytes",
             INITIAL_API_KEY="initial-key",
         )
@@ -87,7 +97,7 @@ class BackendAuthFlowTest(unittest.TestCase):
         )
 
     def _bearer(self, token):
-        return {**CK, "Authorization": f"Bearer {token}"}
+        return {"Authorization": f"Bearer {token}"}
 
     def test_bootstrap_wrong_key(self):
         self.assertEqual(self._bootstrap("nope").status_code, 401)
@@ -165,7 +175,7 @@ class DatabaseClientStubTest(unittest.TestCase):
 
     def test_backend_with_stub_grants_nothing(self):
         os.environ.update(
-            CONTAINER_API_KEY="container-key",
+            SECRETS,
             JWT_SECRET="test-jwt-secret-with-at-least-32-bytes",
             INITIAL_API_KEY="initial-key",
         )
@@ -181,18 +191,10 @@ class SharedAuthTest(unittest.TestCase):
         for cls in (FrontendAuth, DatabaseAuth):
             self.assertTrue(issubclass(cls, BaseAuth))
 
-    def test_container_key_check_is_fail_closed(self):
-        os.environ.pop("CONTAINER_API_KEY", None)
-        from flask import Flask
-        app = Flask(__name__)
-        auth = FrontendAuth()
-
-        @app.route("/x")
-        @auth.require_container_key
-        def x():
-            return "ok"
-
-        self.assertEqual(app.test_client().get("/x").status_code, 503)
+    def test_container_route_without_secret_is_refused(self):
+        os.environ.pop("BACKEND_FRONTEND_SECRET", None)
+        with self.assertRaises(RuntimeError):
+            FrontendAuth().validate_config()
 
 
 if __name__ == "__main__":

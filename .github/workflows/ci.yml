@@ -151,12 +151,56 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # Tests: every test case in tests/ must run and pass. A skipped test or an
+  # empty run fails the job, so no case can silently drop out of the gate
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit and integration tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies (hash-pinned)
+        run: python -m pip install --no-cache-dir --require-hashes -r requirements.txt
+
+      - name: Run all test cases (fails on any failure, skip or empty run)
+        run: |
+          set -o pipefail
+          python -W error::UserWarning -m unittest discover -s tests -t . -v 2>&1 | tee test-output.txt
+          summary="$(grep -E '^Ran [0-9]+ tests?' test-output.txt)"
+          echo "${summary}"
+          if [[ -z "${summary}" || "${summary}" == "Ran 0 tests"* ]]; then
+            echo "::error::No test cases were run."
+            exit 1
+          fi
+          if grep -qE '^(OK|FAILED) \(.*skipped' test-output.txt; then
+            echo "::error::Skipped test cases are not allowed."
+            exit 1
+          fi
+
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-output
+          path: test-output.txt
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # Build: image + SBOM + image scan + smoke test. The tested image is the
   # exact artifact that is later published
   # ---------------------------------------------------------------------------
   build:
     name: Build, scan and smoke-test image
-    needs: [secrets-and-lint, sast, dependency-audit]
+    needs: [secrets-and-lint, sast, dependency-audit, unit-tests]
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
