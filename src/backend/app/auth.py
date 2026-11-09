@@ -14,8 +14,10 @@ __all__ = ["BackendAuth", "BootstrapConsumedError"]
 
 class BackendAuth(BaseAuth):
     INITIAL_KEY_ENV = "INITIAL_API_KEY"
+
+    CONTAINER_ID = "backend"
+    PEERS = ("frontend", "database")
     REQUIRED_ENV = (
-        BaseAuth.CONTAINER_KEY_ENV,
         BaseAuth.JWT_SECRET_ENV,
         INITIAL_KEY_ENV,
     )

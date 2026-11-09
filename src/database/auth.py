@@ -1,13 +1,18 @@
 """
 Database container authentication.
+
+Only the backend may call the database, proving BACKEND_DATABASE_SECRET bound
+to the TLS certificate (see shared/container_auth.py). The database knows no
+users and no JWT secret.
 """
 
 from shared.auth import BaseAuth
 
 
 class DatabaseAuth(BaseAuth):
-    REQUIRED_ENV = (BaseAuth.CONTAINER_KEY_ENV,)
+    CONTAINER_ID = "database"
+    PEERS = ("backend",)
 
     def check_access_token(self, roles):
-        """The database does not accept user tokens, only container keys."""
-        raise NotImplementedError("DatabaseAuth authenticates by container key only.")
+        """The database does not accept user tokens, only authenticated containers."""
+        raise NotImplementedError("DatabaseAuth authenticates containers only.")
