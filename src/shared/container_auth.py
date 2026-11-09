@@ -309,3 +309,79 @@ class ContainerClient:
         if not isinstance(data, dict):
             raise ContainerUnavailableError(f"{self._peer} sent an unexpected payload")
         return status, data
+
+
+class PeerMonitor:
+    """
+    Keeps the container-to-container authentication active in one direction.
+
+    It pings a peer's authenticated route at a fixed interval. One successful
+    ping proves both sides: the peer accepted our signature, and we accepted
+    its proof. State changes are logged, so a wrong secret, a swapped
+    certificate or a missing peer shows up in the logs of both containers.
+
+    States: unknown, authenticated, auth_failed, unreachable, error-<status>
+    """
+
+    def __init__(self, client: ContainerClient, peer: str, path: str, interval: float) -> None:
+        self.peer = peer
+        self.state = "unknown"
+        self._client = client
+        self._path = path
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=f"peer-monitor-{peer}", daemon=True)
+
+    def check(self) -> str:
+        detail = ""
+        try:
+            status, _ = self._client.request("GET", self._path)
+            state = "authenticated" if status == 200 else f"error-{status}"
+        except ContainerAuthError as exc:
+            state, detail = "auth_failed", f" ({exc})"
+        except ContainerUnavailableError:
+            state = "unreachable"
+
+        if state != self.state:
+            if state == "authenticated":
+                log.info("Peer %s: mutual authentication OK", self.peer)
+            else:
+                log.warning("Peer %s: %s%s", self.peer, state, detail)
+            self.state = state
+        return state
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self.check()
+            self._stop.wait(self._interval)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+
+def start_peer_monitors(auth: ContainerAuth, targets: dict[str, tuple[str, str]]) -> list[PeerMonitor]:
+    """
+    Start one monitor per peer whose URL is configured.
+
+    ``targets`` maps a peer to (env variable holding its https URL, route to ping).
+    A peer without a configured URL is skipped, an invalid URL stops the container.
+    Interval: PEER_CHECK_INTERVAL_SECONDS (default 30).
+    """
+    interval = float(os.environ.get("PEER_CHECK_INTERVAL_SECONDS", "30"))
+    if interval <= 0:
+        raise RuntimeError("PEER_CHECK_INTERVAL_SECONDS must be greater than 0")
+
+    monitors = []
+    for peer, (url_env, path) in targets.items():
+        url = os.environ.get(url_env, "")
+        if not url:
+            log.info("%s not set: peer %s is not monitored", url_env, peer)
+            continue
+        monitor = PeerMonitor(auth.client(peer, url), peer, path, interval)
+        monitor.start()
+        monitors.append(monitor)
+    return monitors
