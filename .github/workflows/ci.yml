@@ -79,10 +79,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Hadolint (Containerfile lint)
+      - name: Hadolint (Containerfile lint, backend)
         uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: src/backend/Containerfile
+          failure-threshold: warning
+
+      - name: Hadolint (Containerfile lint, frontend)
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: src/frontend/Containerfile
+          failure-threshold: warning
+
+      # Starts linting as soon as the database Containerfile exists
+      - name: Hadolint (Containerfile lint, database)
+        if: hashFiles('src/database/Containerfile') != ''
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: src/database/Containerfile
           failure-threshold: warning
 
   # ---------------------------------------------------------------------------
