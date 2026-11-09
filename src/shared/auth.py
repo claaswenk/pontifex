@@ -3,18 +3,25 @@ Shared authentication primitives for every Pontifex container
 
 ``BaseAuth`` holds the mechanisms that are identical everywhere:
 
-* container identity  - ``X-Container-Key`` header vs. ``CONTAINER_API_KEY`` env
-* password hashing    - Argon2id
-* access tokens       - 5-minute HS256 JWTs
-* request decorators  - ``require_container_key`` and ``require_role``
+* user access tokens   - 5-minute HS256 JWTs, ``require_role``
+* password hashing     - Argon2id
+* container identity   - secret bound to the TLS certificate, ``require_container``
+                         (see ``shared/container_auth.py``)
 
-Each container (backend, frontend, database) subclasses it and adds only the
-authentication its own endpoints need.
+Each container (backend, frontend, database) subclasses it, names itself and
+its peers, and adds only the authentication its own endpoints need.
+
+Two separate trust paths exist on purpose:
+
+* Anyone (external callers, the frontend's users) -> public API: user access
+  token only. No container secret is involved, so the backend is usable
+  independently of the frontend.
+* Container -> container: signed requests and signed responses. These routes
+  are never reachable with a user token and vice versa.
 """
 
 import datetime
 import os
-import secrets
 from functools import wraps
 from typing import Any, List
 
@@ -23,18 +30,22 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from flask import g, jsonify, request
 
+from shared.container_auth import ContainerAuth
+
 
 class BaseAuth:
-    CONTAINER_KEY_ENV = "CONTAINER_API_KEY"
-    CONTAINER_KEY_HEADER = "X-Container-Key"
     JWT_SECRET_ENV = "JWT_SECRET"
     JWT_ALGORITHM = "HS256"
     ACCESS_TOKEN_TTL = datetime.timedelta(minutes=5)
 
-    REQUIRED_ENV: tuple[str, ...] = (CONTAINER_KEY_ENV,)
+    # Overridden by every container.
+    CONTAINER_ID = ""
+    PEERS: tuple[str, ...] = ()
+    REQUIRED_ENV: tuple[str, ...] = ()
 
     def __init__(self) -> None:
         self._hasher = PasswordHasher()
+        self.container = ContainerAuth(self.CONTAINER_ID, self.PEERS)
 
     # ------------------------------------------------------------------
     # Configuration
@@ -47,6 +58,11 @@ class BaseAuth:
             raise RuntimeError(
                 "Missing required environment variables: " + ", ".join(missing)
             )
+        self.container.validate_config()
+
+    def init_app(self, app) -> None:
+        """Attach container-level response signing to a Flask app."""
+        self.container.init_app(app)
 
     def _jwt_secret(self) -> str:
         secret = os.environ.get(self.JWT_SECRET_ENV, "")
@@ -108,22 +124,12 @@ class BaseAuth:
     @staticmethod
     def keys_match(provided: str, expected: str) -> bool:
         """Constant-time comparison that is also safe for non-ASCII input."""
+        import secrets
         return secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
     # ------------------------------------------------------------------
     # Checks: each returns None on success or a ready-made error response
     # ------------------------------------------------------------------
-
-    def check_container_key(self):
-        """Fail-closed: a container without a configured key rejects everything."""
-        expected = os.environ.get(self.CONTAINER_KEY_ENV, "")
-        if not expected:
-            return jsonify({"error": f"{self.CONTAINER_KEY_ENV} not configured."}), 503
-
-        provided = request.headers.get(self.CONTAINER_KEY_HEADER, "")
-        if not provided or not self.keys_match(provided, expected):
-            return jsonify({"error": "Unauthorized: invalid container key."}), 401
-        return None
 
     def check_access_token(self, roles: tuple[str, ...]):
         token = self.bearer_token()
@@ -144,24 +150,16 @@ class BaseAuth:
     # Decorators
     # ------------------------------------------------------------------
 
-    def require_container_key(self, f):
-        """Only requests carrying this container's key may pass."""
-        @wraps(f)
-        def decorated(*args, **kwargs):
-            denied = self.check_container_key()
-            if denied is not None:
-                return denied
-            return f(*args, **kwargs)
-        return decorated
+    def require_container(self, *peers: str):
+        """Only the named peer containers, proving the pair secret, may call the route."""
+        return self.container.require(*peers)
 
     def require_role(self, *roles: str):
-        """Container key + valid access token whose role is in ``roles``."""
+        """Valid user access token whose role is in ``roles``."""
         def decorator(f):
             @wraps(f)
             def decorated(*args, **kwargs):
-                denied = self.check_container_key()
-                if denied is None:
-                    denied = self.check_access_token(roles)
+                denied = self.check_access_token(roles)
                 if denied is not None:
                     return denied
                 return f(*args, **kwargs)
