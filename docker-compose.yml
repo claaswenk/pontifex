@@ -44,8 +44,10 @@ services:
     environment:
       # One-time bootstrap key – unique per container deployment
       INITIAL_API_KEY: ${INITIAL_API_KEY}
-      # Inter-container identity key sent on every cross-service request
-      CONTAINER_API_KEY: ${CONTAINER_API_KEY}
+      # Container-to-container secrets, one per pair. Never sent over the wire:
+      # they only sign requests/responses bound to the TLS certificate.
+      BACKEND_FRONTEND_SECRET: ${BACKEND_FRONTEND_SECRET}
+      BACKEND_DATABASE_SECRET: ${BACKEND_DATABASE_SECRET}
       # HMAC secret for signing JWT access tokens
       JWT_SECRET: ${JWT_SECRET}
       # Server port
@@ -81,6 +83,8 @@ services:
     ports:
       - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-8443}:8443"
     environment:
+      # Only the secret shared with the backend; no JWT secret, no database secret
+      BACKEND_FRONTEND_SECRET: ${BACKEND_FRONTEND_SECRET}
       # Extra names/IPs in the self-signed certificate (used on first start only)
       TLS_EXTRA_SANS: ${TLS_EXTRA_SANS:-}
     volumes:
