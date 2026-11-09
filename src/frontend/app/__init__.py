@@ -11,6 +11,7 @@ def create_app() -> Flask:
     auth = FrontendAuth()
     auth.validate_config()
     auth.init_app(app)
+    app.extensions["auth"] = auth
 
     @app.after_request
     def set_security_headers(response):

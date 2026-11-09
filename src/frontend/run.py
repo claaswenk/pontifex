@@ -16,6 +16,7 @@ import ssl
 import sys
 
 from app import create_app
+from shared.container_auth import start_peer_monitors
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -49,5 +50,9 @@ def _build_tls_context() -> ssl.SSLContext:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8443))
     tls_context = _build_tls_context()
+    # Frontend -> backend: signs its requests and checks the backend's proof.
+    start_peer_monitors(app.extensions["auth"].container, {
+        "backend": ("BACKEND_URL", "/api/internal/ping"),
+    })
     log.info("Starting Pontifex frontend on HTTPS port %d", port)
     app.run(host="0.0.0.0", port=port, debug=False, ssl_context=tls_context)
