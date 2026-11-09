@@ -209,7 +209,8 @@ jobs:
             -e TLS_CERT_PATH=/run/secrets/tls.crt \
             -e TLS_KEY_PATH=/run/secrets/tls.key \
             -e INITIAL_API_KEY="$(openssl rand -hex 32)" \
-            -e CONTAINER_API_KEY="$(openssl rand -hex 32)" \
+            -e BACKEND_FRONTEND_SECRET="$(openssl rand -hex 32)" \
+            -e BACKEND_DATABASE_SECRET="$(openssl rand -hex 32)" \
             -e JWT_SECRET="$(openssl rand -hex 32)" \
             "${IMAGE_NAME}:${GITHUB_SHA}"
           for i in $(seq 1 20); do
@@ -267,7 +268,8 @@ jobs:
             -e TLS_CERT_PATH=/run/secrets/tls.crt \
             -e TLS_KEY_PATH=/run/secrets/tls.key \
             -e INITIAL_API_KEY="$(openssl rand -hex 32)" \
-            -e CONTAINER_API_KEY="$(openssl rand -hex 32)" \
+            -e BACKEND_FRONTEND_SECRET="$(openssl rand -hex 32)" \
+            -e BACKEND_DATABASE_SECRET="$(openssl rand -hex 32)" \
             -e JWT_SECRET="$(openssl rand -hex 32)" \
             "${IMAGE_NAME}:${GITHUB_SHA}"
           for i in $(seq 1 20); do
