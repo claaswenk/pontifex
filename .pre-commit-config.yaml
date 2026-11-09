@@ -24,7 +24,7 @@ repos:
       - id: hadolint
         name: Lint Containerfile
         args: ["--failure-threshold", "warning"]
-        files: ^src/backend/Containerfile$
+        files: ^src/(backend|frontend|database)/Containerfile$
         types: [file]
 
   - repo: https://github.com/PyCQA/bandit

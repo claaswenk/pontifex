@@ -19,15 +19,13 @@
 #   the named volume sqlite_data, mounted at /app/data/pontifex.db.
 #   Set DB_PATH in your .env to override the default path.
 #
-# TLS (mandatory - the backend refuses to start without a certificate):
-#   Put your certificate and key in ./certs/tls.crt and ./certs/tls.key.
-#   ./certs is bind-mounted read-only to /run/secrets in the container.
-#   The container runs as uid 10001, so both files must be world-readable
-#   (chmod 644) or owned by that uid.
-#   Self-signed certificate for local use:
-#     mkdir -p certs && openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-#       -subj "/CN=localhost" -keyout certs/tls.key -out certs/tls.crt \
-#     && chmod 644 certs/tls.key certs/tls.crt
+# TLS (mandatory - automatically generated):
+#   Each deployment generates its own self-signed TLS certificate and private
+#   key on first container startup.
+#   Certificates are stored persistently in the named volume tls_certs,
+#   mounted at /app/certs.
+#   No host-side certificate files are required.
+#   The container runs as uid 10001.
 # =============================================================================
 
 services:
@@ -46,21 +44,23 @@ services:
     environment:
       # One-time bootstrap key – unique per container deployment
       INITIAL_API_KEY: ${INITIAL_API_KEY}
-      # Inter-container identity key sent on every cross-service request
-      CONTAINER_API_KEY: ${CONTAINER_API_KEY}
+      # Container-to-container secrets, one per pair. Never sent over the wire:
+      # they only sign requests/responses bound to the TLS certificate.
+      BACKEND_FRONTEND_SECRET: ${BACKEND_FRONTEND_SECRET}
+      BACKEND_DATABASE_SECRET: ${BACKEND_DATABASE_SECRET}
+      # Where the backend reaches the frontend (checked every PEER_CHECK_INTERVAL_SECONDS)
+      FRONTEND_URL: ${FRONTEND_URL:-https://frontend:8443}
+      PEER_CHECK_INTERVAL_SECONDS: ${PEER_CHECK_INTERVAL_SECONDS:-30}
       # HMAC secret for signing JWT access tokens
       JWT_SECRET: ${JWT_SECRET}
-      # TLS certificate paths INSIDE the container (read from .env at runtime,
-      # defaults match the ENV defaults in the Containerfile)
-      TLS_CERT_PATH: ${TLS_CERT_PATH:-/run/secrets/tls.crt}
-      TLS_KEY_PATH: ${TLS_KEY_PATH:-/run/secrets/tls.key}
       # Server port
       PORT: ${PORT:-7337}
       # SQLite database file path (inside the container)
       DB_PATH: ${DB_PATH:-/app/data/pontifex.db}
     volumes:
-      # Host directory with tls.crt / tls.key -> /run/secrets in the container
-      - ${CERTS_DIR:-./certs}:/run/secrets:ro
+      # Individual TLS certificates per deployment
+      - tls_certs:/app/certs
+      # SQLite database
       - sqlite_data:/app/data
     networks:
       - pontifex-net
@@ -74,12 +74,54 @@ services:
       start_period: 10s
       retries: 3
 
+  # ---------------------------------------------------------------------------
+  # Frontend – Flask UI (HTTPS, published on FRONTEND_BIND_ADDRESS:FRONTEND_PORT)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: src/frontend/Containerfile
+    container_name: pontifex-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-8443}:8443"
+    environment:
+      # Only the secret shared with the backend; no JWT secret, no database secret
+      BACKEND_FRONTEND_SECRET: ${BACKEND_FRONTEND_SECRET}
+      # Where the frontend reaches the backend (checked every PEER_CHECK_INTERVAL_SECONDS)
+      BACKEND_URL: ${BACKEND_URL:-https://backend:7337}
+      PEER_CHECK_INTERVAL_SECONDS: ${PEER_CHECK_INTERVAL_SECONDS:-30}
+
+      # Extra names/IPs in the self-signed certificate (used on first start only)
+      TLS_EXTRA_SANS: ${TLS_EXTRA_SANS:-}
+    volumes:
+      - frontend_tls_certs:/app/certs
+    networks:
+      - pontifex-net
+    healthcheck:
+      test: >
+        python -c "import urllib.request, ssl;
+        urllib.request.urlopen('https://127.0.0.1:8443/health',
+        timeout=2, context=ssl._create_unverified_context())"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
 # =============================================================================
 # Named volumes
 # =============================================================================
 volumes:
-  # SQLite database file – persists across container restarts
+  # SQLite database volume
   sqlite_data:
+    driver: local
+
+  # Persistent TLS certificates and private key
+  tls_certs:
+    driver: local
+
+  # Persistent TLS certificates and private key of the frontend
+  frontend_tls_certs:
     driver: local
 
 # =============================================================================
