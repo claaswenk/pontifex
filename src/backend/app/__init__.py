@@ -22,6 +22,7 @@ def create_app(database=None):
 
     auth = BackendAuth(database or DatabaseClient())
     auth.validate_config()
+    auth.init_app(app)
     app.extensions["auth"] = auth
     app.register_blueprint(create_api_blueprint(auth), url_prefix='/api')
 
