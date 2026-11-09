@@ -6,6 +6,12 @@ from flask import Flask, jsonify, render_template
 def create_app() -> Flask:
     app = Flask(__name__)
 
+    from app.auth import FrontendAuth
+
+    auth = FrontendAuth()
+    auth.validate_config()
+    auth.init_app(app)
+
     @app.after_request
     def set_security_headers(response):
         response.headers["Content-Security-Policy"] = (
@@ -25,5 +31,11 @@ def create_app() -> Flask:
     @app.route("/health")
     def health():
         return jsonify({"status": "healthy", "service": "pontifex-frontend"}), 200
+
+    # Backend only: mutual container authentication check.
+    @app.route("/internal/ping")
+    @auth.require_container("backend")
+    def internal_ping():
+        return jsonify({"status": "ok", "service": "pontifex-frontend"}), 200
 
     return app
