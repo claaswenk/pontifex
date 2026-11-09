@@ -16,6 +16,7 @@ RUN apt-get update \
 
 COPY src/frontend/run.py .
 COPY src/frontend/app/ ./app/
+COPY src/shared/ ./shared/
 COPY src/frontend/entrypoint.sh /entrypoint.sh
 
 RUN groupadd --system --gid 10001 app \
