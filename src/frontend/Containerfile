@@ -12,6 +12,7 @@ RUN apt-get update \
        apt=3.0.4 \
        libapt-pkg7.0=3.0.4 \
        openssl=3.5.7-1~deb13u3 \
+       zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY src/frontend/run.py .
