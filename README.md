@@ -7,6 +7,8 @@
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot&logoColor=white)](.github/dependabot.yml)
 [![Stars](https://img.shields.io/github/stars/claaswenk/pontifex?style=flat&logo=github)](https://github.com/claaswenk/pontifex/stargazers)
 
+![Pontifex Owl](assets/pontifex_logo.png)
+
 ## Quick start
 
 ```bash
