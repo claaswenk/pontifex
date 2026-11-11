@@ -1,0 +1,42 @@
+FROM python:3.11-slim@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
+    && pip uninstall -y setuptools wheel
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       apt=3.0.4 \
+       libapt-pkg7.0=3.0.4 \
+       openssl=3.5.7-1~deb13u3 \
+       zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY src/frontend/run.py .
+COPY src/frontend/app/ ./app/
+COPY src/shared/ ./shared/
+COPY src/frontend/entrypoint.sh /entrypoint.sh
+
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --no-create-home --uid 10001 --gid 10001 app \
+    && mkdir -p /app/certs \
+    && chown -R 10001:10001 /app/certs \
+    && chmod 700 /app/certs \
+    && chmod +x /entrypoint.sh
+
+ENV PORT=8443 \
+    TLS_CERT_PATH=/app/certs/tls.crt \
+    TLS_KEY_PATH=/app/certs/tls.key
+
+USER 10001:10001
+
+EXPOSE 8443
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["python", "-c", "import urllib.request, ssl; urllib.request.urlopen('https://127.0.0.1:8443/health', timeout=2, context=ssl._create_unverified_context())"]
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python", "run.py"]

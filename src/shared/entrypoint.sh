@@ -6,16 +6,20 @@ CERT_DIR="/app/certs"
 CERT_FILE="$CERT_DIR/tls.crt"
 KEY_FILE="$CERT_DIR/tls.key"
 
+# Subject alternative names of the generated certificate. Containers that are
+# reached by another container under a service name add that name here.
+TLS_SAN="${TLS_SAN:-DNS:localhost,IP:127.0.0.1}"
+
 # --------------------------------------------------
 # Check permissions
 # --------------------------------------------------
 
 echo "[INIT] Running as UID $(id -u)..."
 
-mkdir -p "$CERT_DIR" /app/data
+mkdir -p "$CERT_DIR"
 
-if [ ! -w "$CERT_DIR" ] || [ ! -w /app/data ]; then
-    echo "[ERROR] Required directories are not writable."
+if [ ! -w "$CERT_DIR" ]; then
+    echo "[ERROR] $CERT_DIR is not writable."
     exit 1
 fi
 
@@ -44,7 +48,7 @@ if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
         -keyout "$TEMP_KEY" \
         -out "$TEMP_CERT" \
         -subj "/CN=localhost" \
-        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+        -addext "subjectAltName=$TLS_SAN"
 
     chmod 600 "$TEMP_KEY"
     chmod 644 "$TEMP_CERT"
@@ -61,9 +65,24 @@ else
 fi
 
 # --------------------------------------------------
+# Publish the PUBLIC certificate so that other containers
+# can pin it, e.g. the backend verifying the database.
+# --------------------------------------------------
+
+if [ -n "${TLS_PUBLISH_DIR:-}" ]; then
+    if [ ! -w "$TLS_PUBLISH_DIR" ]; then
+        echo "[ERROR] $TLS_PUBLISH_DIR is not writable."
+        exit 1
+    fi
+    cp "$CERT_FILE" "$TLS_PUBLISH_DIR/tls.crt"
+    chmod 644 "$TLS_PUBLISH_DIR/tls.crt"
+    echo "[TLS] Public certificate published to $TLS_PUBLISH_DIR."
+fi
+
+# --------------------------------------------------
 # Start application
 # --------------------------------------------------
 
-echo "[APP] Starting Pontifex backend..."
+echo "[APP] Starting Pontifex..."
 
 exec "$@"
