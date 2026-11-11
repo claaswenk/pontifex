@@ -17,13 +17,13 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: "docker"
-    directories: "/src/backend/"
+    directory: "/src/backend/"
     target-branch: "dev"
     schedule:
       interval: "weekly"
 
   - package-ecosystem: "docker"
-    directories: "/src/frontend/"
+    directory: "/src/frontend/"
     target-branch: "dev"
     schedule:
       interval: "weekly"
