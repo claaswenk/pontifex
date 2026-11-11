@@ -1,14 +1,14 @@
 version: 2
 updates:
   - package-ecosystem: "pip"
-    directories: "/*"
+    directory: "/"
     target-branch: "dev"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
 
   - package-ecosystem: "github-actions"
-    directories: "/*"
+    directory: "/"
     target-branch: "dev"
     schedule:
       interval: "weekly"
@@ -17,7 +17,13 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: "docker"
-    directories: "/*"
+    directories: "/src/backend/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directories: "/src/frontend/"
     target-branch: "dev"
     schedule:
       interval: "weekly"
