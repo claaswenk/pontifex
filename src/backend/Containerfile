@@ -9,25 +9,28 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+       apt=3.0.4 \
+       libapt-pkg7.0=3.0.4 \
        openssl=3.5.7-1~deb13u3 \
        util-linux=2.41.5-0+deb13u1 \
+       zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY src/backend/run.py .
 COPY src/backend/app/ ./app/
-COPY src/backend/entrypoint.sh /entrypoint.sh
+COPY src/shared/ ./shared/
+COPY src/shared/entrypoint.sh /entrypoint.sh
 
 RUN groupadd --system --gid 10001 app \
     && useradd --system --no-create-home --uid 10001 --gid 10001 app \
-    && mkdir -p /app/certs /app/data \
-    && chown -R 10001:10001 /app/certs /app/data \
+    && mkdir -p /app/certs \
+    && chown -R 10001:10001 /app/certs \
     && chmod 700 /app/certs \
     && chmod +x /entrypoint.sh
 
 ENV PORT=7337 \
     TLS_CERT_PATH=/app/certs/tls.crt \
-    TLS_KEY_PATH=/app/certs/tls.key \
-    DB_PATH=/app/data/pontifex.db
+    TLS_KEY_PATH=/app/certs/tls.key
 
 USER 10001:10001
 
