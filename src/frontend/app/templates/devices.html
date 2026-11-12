@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Devices{% endblock %}
+
+{% block content %}
+<h1>Devices</h1>
+<p class="lead">Your devices and whether they currently answer.</p>
+
+<section class="tiles" aria-label="Summary">
+  <div class="tile">
+    <span class="tile__value">{{ summary.total }}</span>
+    <span class="tile__label">Total</span>
+  </div>
+  <div class="tile tile--online">
+    <span class="tile__value">{{ summary.online }}</span>
+    <span class="tile__label">Online</span>
+  </div>
+  <div class="tile tile--offline">
+    <span class="tile__value">{{ summary.offline }}</span>
+    <span class="tile__label">Offline</span>
+  </div>
+</section>
+
+<section class="panel" aria-label="Device list">
+  {% if devices %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Status</th>
+          <th scope="col">Name</th>
+          <th scope="col">Address</th>
+          <th scope="col" class="num">Latency</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for device in devices %}
+        <tr>
+          <td>
+            <span class="status status--{{ device.status }}">
+              <span class="dot" aria-hidden="true"></span>{{ device.status | capitalize }}
+            </span>
+          </td>
+          <td>{{ device.name }}</td>
+          <td><code>{{ device.address }}</code></td>
+          <td class="num">{% if device.latency_ms is not none %}{{ device.latency_ms }} ms{% else %}-{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No devices yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

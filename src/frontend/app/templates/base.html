@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Pontifex{% endblock %} - Pontifex</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__inner">
+      <a class="brand" href="{{ url_for('devices') }}">Pontifex</a>
+      <nav aria-label="Main">
+        <a href="{{ url_for('devices') }}"{% if active == 'devices' %} aria-current="page"{% endif %}>Devices</a>
+        <a href="{{ url_for('account') }}"{% if active == 'account' %} aria-current="page"{% endif %}>Account</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    {% if preview %}
+    <p class="notice" role="note">
+      <strong>Preview.</strong> This page shows sample data. It is not connected to the backend yet.
+    </p>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <span>pontifex-frontend</span>
+    <span>Server time {{ server_time }}</span>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Account{% endblock %}
+
+{% block content %}
+<h1>Account</h1>
+<p class="lead">Who you are signed in as.</p>
+
+<div class="grid">
+  <section class="panel" aria-labelledby="profile-title">
+    <h2 id="profile-title">Profile</h2>
+    <dl class="facts">
+      <dt>Username</dt>
+      <dd>{{ account.username }}</dd>
+      <dt>Role</dt>
+      <dd><span class="badge">{{ account.role }}</span></dd>
+      <dt>Devices</dt>
+      <dd>{{ account.device_count }}</dd>
+    </dl>
+  </section>
+
+  <section class="panel" aria-labelledby="session-title">
+    <h2 id="session-title">Session</h2>
+    <dl class="facts">
+      <dt>Access token</dt>
+      <dd>valid for {{ account.token_minutes }} minutes</dd>
+      <dt>Connection</dt>
+      <dd>HTTPS, self-signed certificate</dd>
+    </dl>
+  </section>
+</div>
+{% endblock %}
