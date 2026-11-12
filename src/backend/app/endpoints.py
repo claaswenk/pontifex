@@ -2,7 +2,12 @@ import logging
 
 from flask import Blueprint, jsonify, request, g
 from app.auth import BackendAuth, BootstrapConsumedError
-from app.services import process_pontifex_logic, wake_on_lan as wol_service
+from app.services import (
+    check_devices,
+    process_pontifex_logic,
+    system_stats,
+    wake_on_lan as wol_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,33 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     @auth.require_container("frontend")
     def internal_ping():
         return jsonify({"status": "ok", "service": "pontifex-backend"}), 200
+
+    # -----------------------------------------------------------------------
+    # GET /api/monitoring  (resource usage of the host running the backend)
+    # Needs a token: CPU/RAM/disk figures are reconnaissance data.
+    # -----------------------------------------------------------------------
+
+    @api_bp.route("/monitoring", methods=["GET"])
+    @auth.require_role("admin", "user")
+    def monitoring():
+        return jsonify({"status": "ok", "service": "pontifex-backend", "stats": system_stats()}), 200
+
+    # -----------------------------------------------------------------------
+    # GET /api/metrics  (online/offline state of the caller's own devices)
+    # The device list comes from the database, never from the request, so
+    # callers cannot make the backend probe arbitrary addresses.
+    # -----------------------------------------------------------------------
+
+    @api_bp.route("/metrics", methods=["GET"])
+    @auth.require_role("admin", "user")
+    def metrics():
+        devices = auth.database.list_devices(g.current_user["sub"])
+        results = check_devices(devices)
+        online = sum(1 for d in results if d["status"] == "online")
+        return jsonify({
+            "devices": results,
+            "summary": {"total": len(results), "online": online, "offline": len(results) - online},
+        }), 200
 
     # -----------------------------------------------------------------------
     # POST /api/token
