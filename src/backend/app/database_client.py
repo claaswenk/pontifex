@@ -33,3 +33,7 @@ class DatabaseClient:
 
     def exists(self, username: str) -> bool:
         raise NotImplementedError
+
+    def list_devices(self, username: str) -> list[dict]:
+        """Devices owned by ``username`` as ``[{"name": ..., "address": ...}, ...]``."""
+        raise NotImplementedError
