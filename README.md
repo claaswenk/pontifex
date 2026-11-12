@@ -9,16 +9,39 @@
 
 ![Pontifex Owl](assets/pontifex_logo.png)
 
-## Quick start
+## Quick start (Linux, Podman)
 
 ```bash
-podman build --format docker -t pontifex -f Containerfile .
-podman run --rm -p 127.0.0.1:8080:8080 pontifex
-curl http://127.0.0.1:8080/
+git clone https://github.com/claaswenk/pontifex.git && cd pontifex
+./scripts/init-env.sh        # creates .env with random secrets
+podman compose up -d         # pulls the published images from GHCR
 ```
 
-> [!IMPORTANT]
-> Build with `--format docker`. The default OCI format drops the `HEALTHCHECK` instruction.
+| Service | URL |
+|---|---|
+| Frontend | `https://127.0.0.1:8443` |
+| Backend | `https://127.0.0.1:7337/api/health` |
+
+- Both containers create their own self-signed certificate on first start (kept in named volumes). Your browser warns once.
+- Both ports are bound to `127.0.0.1`. To reach them from other machines set `FRONTEND_BIND_ADDRESS` / `BACKEND_BIND_ADDRESS` in `.env` to a specific host IP, never `0.0.0.0`. For the frontend also set `TLS_EXTRA_SANS`, see [`.env.example`](.env.example).
+- `./scripts/init-env.sh` prints `INITIAL_API_KEY`. It is needed once to create the first admin. The script never overwrites an existing `.env`.
+- The database container is not part of the stack yet, so endpoints that need it answer with an error.
+
+Pin a version instead of `latest` by setting `PONTIFEX_TAG=v1.0.0` (or `sha-<commit>`) in `.env`.
+
+### Build from the local sources
+
+Use this before the images are published, or to test changes before a commit. The images are built with plain `podman build` (as in the CI) and tagged `local`, so compose starts them without pulling:
+
+```bash
+podman build -t ghcr.io/claaswenk/pontifex-backend:local  -f src/backend/Containerfile .
+podman build -t ghcr.io/claaswenk/pontifex-frontend:local -f src/frontend/Containerfile .
+PONTIFEX_TAG=local podman compose up -d
+```
+
+Windows PowerShell (dev system): run `.\scripts\init-env.ps1` instead of the `.sh`, and set the tag with `$env:PONTIFEX_TAG='local'` before `podman compose up -d`.
+
+Reset including the generated certificates: `podman compose down -v`.
 
 ## Developer setup
 
@@ -57,23 +80,71 @@ Defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Every gate be
 | `secrets-and-lint` | Gitleaks over the full history, Hadolint |
 | `sast` | Bandit, severity MEDIUM or higher |
 | `dependency-audit` | `pip-audit`, any known vulnerability |
-| `build` | Podman build, SBOM (CycloneDX), Trivy HIGH/CRITICAL, non-root check, smoke test, healthcheck |
-| `dast` | OWASP ZAP baseline. Manual run or `test/dast-**` branches only |
-| `publish` | Push to GHCR from `main` or a `v*` tag, after `build` passes. Pushes the tested image without rebuilding |
+| `build` | Per service (backend, frontend): Podman build, SBOM (CycloneDX), Trivy HIGH/CRITICAL, non-root check, smoke test without a mounted certificate (as in a real deployment), healthcheck |
+| `dast` | OWASP ZAP baseline against the backend. Manual run or `test/dast-**` branches only |
+| `publish` | Push both images to GHCR from `main` or a `v*` tag, after `build` passes. Pushes the tested images without rebuilding. For tags it first checks the format (`v1.2.3`) and that the commit is on `main` |
+| `release` | Only for `v*` tags, after `publish`: creates the GitHub Release with generated notes and the image digests. The only job with write access to repository contents |
 
-Reports are uploaded as workflow artifacts: `sast-report`, `dependency-audit-report`, `sbom`, `container-image` and `dast-report`.
+Reports are uploaded as workflow artifacts: `sast-report`, `dependency-audit-report`, `sbom-<service>`, `container-image-<service>` and `dast-report`.
 
 > [!WARNING]
 > Put deliberately insecure code for DAST positive tests only on `test/dast-**` branches. It must never reach `main`.
 
-Published image:
+Published images (tags: `sha-<commit>`, `v*` on version tags, `latest` on `main`):
 
 ```bash
-podman pull ghcr.io/claaswenk/pontifex:sha-<commit>
+podman pull ghcr.io/claaswenk/pontifex-backend:sha-<commit>
+podman pull ghcr.io/claaswenk/pontifex-frontend:sha-<commit>
 ```
 
 > [!TIP]
-> Reference the image by digest (`@sha256:...`), which is printed in the `publish` job summary.
+> Reference the image by digest (`@sha256:...`), which is printed in the `publish` job summary and in the release notes.
+
+## Releases
+
+Merging to `main` publishes `latest` and `sha-<commit>`. A **release** is a deliberate decision on top of that: you tag a commit on `main`, and the pipeline publishes the images under that version and creates the GitHub Release.
+
+| Tag | Moves? | Use for |
+|---|---|---|
+| `latest` | yes, with every merge to `main` | test and home servers |
+| `sha-<commit>` | no | reproducing one exact commit |
+| `v1.2.3` | no, never | production and rollback |
+
+Versions follow `vMAJOR.MINOR.PATCH`: `PATCH` for fixes, `MINOR` for new features that break nothing, `MAJOR` for changes that need action from the operator (for example new `.env` variables). Pre-releases use a suffix such as `v1.0.0-rc.1` and are marked as pre-release on GitHub. Start with `v0.1.0`.
+
+### How to release
+
+1. Merge `dev` into `main` with a pull request and wait until the CI on `main` is green.
+2. Deploy `latest` somewhere and check that it starts (see [Quick start](#quick-start-linux-podman)).
+3. Tag that commit on `main` and push the tag:
+
+   ```bash
+   git checkout main && git pull
+   git tag -s v0.1.0 -m "v0.1.0"      # -s signs the tag; use -a if you have no signing key
+   git push origin v0.1.0
+   ```
+
+4. Watch the run for the tag under **Actions**. It builds and scans both images again, checks the tag, publishes `pontifex-backend:v0.1.0` and `pontifex-frontend:v0.1.0`, and creates the release.
+5. On the server set `PONTIFEX_TAG=v0.1.0` in `.env`, then:
+
+   ```bash
+   podman compose pull
+   podman compose up -d
+   ```
+
+**Roll back:** set the previous tag in `.env` and run `podman compose up -d` again.
+
+**Fix a bad release:** never move or delete a published tag, servers may already run it. Fix the problem on `dev`, merge to `main` and release the next patch version (`v0.1.1`).
+
+> [!IMPORTANT]
+> Push the tag only. Do not create the release by hand in the GitHub web UI: that creates the tag as a side effect and the pipeline then finds the release already present and leaves it unchanged, without the image digests in the notes.
+
+If the pipeline rejects the tag (wrong format, or the commit is not on `main`), nothing is published. Delete the tag and tag again:
+
+```bash
+git push --delete origin v0.1.0
+git tag -d v0.1.0
+```
 
 ## Star history
 
