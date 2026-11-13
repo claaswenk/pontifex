@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+
+{% block content %}
+<div class="auth">
+  <div class="auth-card auth-card--scene">
+    <div class="scene" aria-hidden="true">
+      <span class="scene-moon"></span>
+      <img class="scene-owl" src="{{ url_for('static', filename='img/logo-320.png') }}" width="128" height="128" alt="">
+    </div>
+    <div class="auth-body">
+      <h1>Sign in</h1>
+      <p class="lead">Use your Pontifex account.</p>
+      <form method="post" action="{{ url_for('login') }}" class="form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" placeholder="Enter your username" autocomplete="username" maxlength="64" required autofocus>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" maxlength="1024" required>
+        <button type="submit" class="button">Sign in</button>
+      </form>
+      <p class="auth-links">First start? <a href="{{ url_for('setup') }}">Create the administrator</a></p>
+    </div>
+  </div>
+</div>
+{% endblock %}

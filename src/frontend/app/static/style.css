@@ -2,18 +2,22 @@
    no inline styles and no external fonts or images. */
 
 :root {
-  --bg: #f4f4f4;
-  --surface: #ffffff;
-  --border: #e0e0e0;
-  --text: #161616;
-  --muted: #525252;
-  --header: #161616;
-  --accent: #0f62fe;
-  --online: #198038;
-  --online-bg: #defbe6;
-  --offline: #da1e28;
-  --offline-bg: #fff1f1;
-  --notice-bg: #edf5ff;
+  color-scheme: dark;
+  --bg: #0a101c;
+  --surface: #111a2e;
+  --surface-2: #1a2745;
+  --border: #27375c;
+  --text: #eef2fb;
+  --muted: #9fb0cf;
+  --header: #070c16;
+  --accent: #2f5fd0;
+  --accent-hover: #4673e0;
+  --link: #a9c1f2;
+  --online: #42be65;
+  --online-bg: #0e3a1c;
+  --offline: #ff8389;
+  --offline-bg: #4d1417;
+  --notice-bg: #14233f;
 }
 
 * { box-sizing: border-box; }
@@ -62,23 +66,25 @@ body {
   display: flex;
   align-items: center;
   padding: 0 1rem;
-  color: #c6c6c6;
+  color: #b4c2de;
   text-decoration: none;
   border-bottom: 3px solid transparent;
 }
 
 .topbar nav a:hover {
-  background: #262626;
+  background: var(--surface-2);
   color: #ffffff;
 }
 
 .topbar nav a[aria-current="page"] {
   color: #ffffff;
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--accent-hover);
 }
 
+a { color: var(--link); }
+
 a:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--link);
   outline-offset: -2px;
 }
 
@@ -158,7 +164,7 @@ th, td {
 }
 
 thead th {
-  background: #f4f4f4;
+  background: var(--surface-2);
   border-bottom: 1px solid var(--border);
   font-size: 0.875rem;
   font-weight: 600;
@@ -166,7 +172,7 @@ thead th {
 }
 
 tbody tr + tr td { border-top: 1px solid var(--border); }
-tbody tr:hover { background: #f9f9f9; }
+tbody tr:hover { background: var(--surface-2); }
 
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 
@@ -182,7 +188,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-si
   align-items: center;
   gap: 0.5rem;
   padding: 0.1rem 0.6rem 0.1rem 0.5rem;
-  border-radius: 1rem;
+  border-radius: 0;
   font-size: 0.875rem;
   font-weight: 600;
 }
@@ -212,13 +218,265 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-si
 .badge {
   display: inline-block;
   padding: 0 0.6rem;
-  border-radius: 1rem;
-  background: #e8daff;
-  color: #491d8b;
+  border-radius: 0;
+  background: #1d2c4d;
+  color: #c9d7f5;
   font-size: 0.875rem;
   font-weight: 600;
   text-transform: capitalize;
 }
+
+/* ---- messages ---------------------------------------------------------- */
+
+.notice--ok { background: var(--online-bg); border-left-color: var(--online); }
+.notice--error { background: var(--offline-bg); border-left-color: var(--offline); }
+
+/* ---- forms and buttons ------------------------------------------------- */
+
+.narrow { max-width: 26rem; margin: 2rem auto 0; }
+
+.spaced { margin-top: 1.5rem; }
+
+.form { display: flex; flex-direction: column; gap: 0.35rem; }
+
+.form label { font-size: 0.875rem; color: var(--muted); margin-top: 0.5rem; }
+
+.form--row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
+.form--row > div { display: flex; flex-direction: column; flex: 1 1 11rem; }
+
+input[type="text"], input[type="password"] {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #34456c;
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+}
+
+input:focus-visible, button:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 1px;
+}
+
+.button {
+  padding: 0.6rem 1.25rem;
+  border: 0;
+  background: var(--accent);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.form > .button { margin-top: 1rem; align-self: flex-start; }
+.form--row > .button { margin-bottom: 0; }
+
+.button:hover { background: var(--accent-hover); }
+.button--small { padding: 0.25rem 0.8rem; font-size: 0.875rem; }
+.button--danger { background: #da1e28; }
+.button--danger:hover { background: #ba1b23; }
+
+.inline { display: inline-flex; gap: 0.5rem; align-items: center; margin: 0; }
+
+.actions { white-space: nowrap; }
+.actions .inline + .inline { margin-left: 0.4rem; }
+
+.nav-button {
+  height: 100%;
+  padding: 0 1rem;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: #b4c2de;
+  font: inherit;
+  cursor: pointer;
+}
+
+.nav-button:hover { background: var(--surface-2); color: #ffffff; }
+
+.hint { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.875rem; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- pictures ---------------------------------------------------------- */
+
+/* Sign-in and setup: a rounded card with the owl in a round badge on its top edge. */
+
+body:has(.auth) {
+  background:
+    radial-gradient(ellipse at 50% -10%, #1c3162 0%, transparent 60%),
+    var(--bg);
+}
+
+.page:has(.auth) { padding-top: 0.5rem; padding-bottom: 1rem; }
+
+.auth { display: flex; justify-content: center; padding-top: 3.5rem; }
+
+.auth-card {
+  position: relative;
+  width: 100%;
+  max-width: 24rem;
+  padding: 4.25rem 2rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: 0 1.25rem 3rem rgba(0, 0, 0, 0.55);
+}
+
+.auth-card h1 {
+  margin: 0 0 0.25rem;
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--link);
+}
+
+.auth-card .lead { margin: 0 0 0.75rem; text-align: center; font-size: 0.875rem; }
+
+.auth-card .form label { margin: 0.35rem 0 0 1rem; }
+
+.auth-card input[type="text"], .auth-card input[type="password"] {
+  padding: 0.6rem 1.1rem;
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: var(--surface-2);
+}
+
+.auth-card input:focus-visible { border-color: var(--link); outline: none; }
+
+.auth-card .form > .button {
+  align-self: stretch;
+  margin-top: 0.9rem;
+  padding: 0.7rem 1.25rem;
+  border-radius: 0;
+  background: linear-gradient(90deg, #1e3a8a, #3f6bd8);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-card .form > .button:hover { filter: brightness(1.15); }
+
+.auth-card .hint { margin: 0.35rem 0 0 1rem; font-size: 0.8rem; }
+
+.form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+.form-pair > div { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
+
+.auth-links { margin: 1rem 0 0; text-align: center; font-size: 0.9rem; }
+.auth-links a { font-weight: 600; text-decoration: none; }
+.auth-links a:hover { text-decoration: underline; }
+/* Sign-in only: a night scene on top (moon, stars, owl), a curved edge, then the form. */
+
+.auth-card--scene { max-width: 22rem; padding: 0; overflow: hidden; }
+
+.scene {
+  position: relative;
+  height: 14rem;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 15% 25%, #24407f 0%, transparent 60%),
+    linear-gradient(180deg, #0c1735 0%, #172b5c 100%);
+}
+
+.scene::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 8% 12%, #fff 0 1.2px, transparent 1.7px),
+    radial-gradient(circle at 24% 8%, #cfdcff 0 1px, transparent 1.5px),
+    radial-gradient(circle at 42% 20%, #fff 0 1.5px, transparent 2px),
+    radial-gradient(circle at 58% 9%, #cfdcff 0 1px, transparent 1.5px),
+    radial-gradient(circle at 74% 16%, #fff 0 1.2px, transparent 1.7px),
+    radial-gradient(circle at 90% 8%, #cfdcff 0 1.4px, transparent 1.9px),
+    radial-gradient(circle at 93% 34%, #fff 0 1px, transparent 1.5px),
+    radial-gradient(circle at 6% 52%, #cfdcff 0 1.2px, transparent 1.7px),
+    radial-gradient(circle at 36% 46%, #fff 0 1px, transparent 1.5px);
+}
+
+/* The curved edge: a large circle in the card colour that rises from left to right. */
+.scene::after {
+  content: "";
+  position: absolute;
+  left: -70%;
+  top: 74%;
+  width: 190%;
+  height: 16rem;
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.scene-moon {
+  position: absolute;
+  left: 2.25rem;
+  top: 2rem;
+  width: 4.75rem;
+  height: 4.75rem;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 38%, rgba(18, 32, 74, 0.55) 0 0.5rem, transparent 0.55rem),
+    radial-gradient(circle at 66% 62%, rgba(18, 32, 74, 0.55) 0 0.65rem, transparent 0.7rem),
+    radial-gradient(circle at 64% 24%, rgba(18, 32, 74, 0.45) 0 0.3rem, transparent 0.35rem),
+    radial-gradient(circle at 32% 30%, #8fa5d8, #4f6499);
+}
+
+.scene-owl {
+  position: absolute;
+  z-index: 1;
+  right: 3.65rem;
+  bottom: 2.8rem;
+  width: 6.25rem;
+  height: 6.25rem;
+  object-fit: contain;
+}
+
+.auth-card--scene .auth-body { position: relative; padding: 0 2rem 1.25rem; margin-top: -1rem; }
+
+/* The setup card is wider and has more fields: a lower scene keeps it on one screen. */
+.auth-card--scene.auth-card--wide { max-width: 32rem; }
+.auth-card--wide .scene { height: 10.5rem; }
+.auth-card--wide .scene-moon { top: 1.25rem; width: 4rem; height: 4rem; }
+.auth-card--wide .scene-owl { bottom: 1.9rem; width: 5rem; height: 5rem; }
+
+
+
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.avatar--admin { background: #dbe5fa; color: #0a1a3f; }
+.avatar--small { width: 1.6rem; height: 1.6rem; margin-right: 0.5rem; font-size: 0.85rem; }
+.avatar--large { width: 4.5rem; height: 4.5rem; margin-bottom: 1rem; font-size: 2rem; }
+
+.device-name { display: inline-flex; align-items: center; gap: 0.6rem; }
+.device-icon { flex: none; fill: currentColor; }
+.device-icon--online { color: var(--online); }
+.device-icon--offline { color: #6c7a96; }
 
 /* ---- footer ----------------------------------------------------------- */
 
@@ -236,6 +494,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-si
 }
 
 @media (max-width: 36rem) {
+  .form-pair { grid-template-columns: 1fr; }
   .tiles { grid-template-columns: 1fr; }
   th, td { padding: 0.6rem 0.9rem; }
   .footer { flex-direction: column; gap: 0.25rem; }
