@@ -19,6 +19,7 @@ def _require_backend(f):
     def decorator(*args, **kwargs):
         auth: DatabaseAuth = api_db.app.extensions["auth"]
         return auth.require_backend(f)(*args, **kwargs)
+    decorator.__name__ = f.__name__
     return decorator
 
 
@@ -39,7 +40,7 @@ def health_check():
 # ---------------------------------------------------------------------------
 
 @api_db.route("/create-user/admin", methods=["POST"])
-#@_require_backend
+@_require_backend
 def create_admin():
     data = request.get_json(silent=True) or {}
     username = data.get("username")
@@ -68,7 +69,7 @@ def create_admin():
 # ---------------------------------------------------------------------------
 
 @api_db.route("/create-user/user", methods=["POST"])
-#@_require_backend
+@_require_backend
 def create_user():
     data = request.get_json(silent=True) or {}
     username = data.get("username")
@@ -97,7 +98,7 @@ def create_user():
 # ---------------------------------------------------------------------------
 
 @api_db.route("/create-device", methods=["POST"])
-#@_require_backend
+@_require_backend
 def create_device():
     data = request.get_json(silent=True) or {}
     device_name = data.get("device_name")
@@ -127,7 +128,7 @@ def create_device():
 # ---------------------------------------------------------------------------
 
 @api_db.route("/create-connection", methods=["POST"])
-#@_require_backend
+@_require_backend
 def create_connection():
     data = request.get_json(silent=True) or {}
     username = data.get("username")
@@ -156,7 +157,7 @@ def create_connection():
 # ---------------------------------------------------------------------------
 
 @api_db.route("/delete/user", methods=["POST"])
-#@_require_backend
+@_require_backend
 def delete_user():
     data = request.get_json(silent=True) or {}
     username = data.get("username")
@@ -183,7 +184,7 @@ def delete_user():
 # ---------------------------------------------------------------------------
 
 @api_db.route("/delete/device", methods=["POST"])
-#@_require_backend
+@_require_backend
 def delete_device():
     data = request.get_json(silent=True) or {}
     username = data.get("username")
@@ -228,7 +229,7 @@ def delete_device():
 # ---------------------------------------------------------------------------
 
 @api_db.route("/delete/connection", methods=["POST"])
-#@_require_backend
+@_require_backend
 def delete_connection():
     data = request.get_json(silent=True) or {}
     username = data.get("username")
