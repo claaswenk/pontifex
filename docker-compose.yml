@@ -55,16 +55,20 @@ services:
       INITIAL_API_KEY: ${INITIAL_API_KEY}
       # HMAC secret for signing JWT access tokens
       JWT_SECRET: ${JWT_SECRET}
+      DB_PATH: ${DB_PATH:-/app/data/pontifex.db}
       # Container-to-container secrets, one per pair. Never sent over the wire.
       BACKEND_FRONTEND_SECRET: ${BACKEND_FRONTEND_SECRET}
       BACKEND_DATABASE_SECRET: ${BACKEND_DATABASE_SECRET}
       # Where the backend reaches the frontend
       FRONTEND_URL: ${FRONTEND_URL:-https://frontend:8443}
+      DATABASE_URL: ${DATABASE_URL:-https://database:13110}
       PEER_CHECK_INTERVAL_SECONDS: ${PEER_CHECK_INTERVAL_SECONDS:-30}
       PORT: ${PORT:-7337}
     volumes:
       - tls_certs:/app/certs
       - wake_socket:/run/pontifex
+      - ./secrets/certs/backend:/run/secrets:ro
+      - sqlite_data:/app/data
     networks:
       - pontifex-net
     healthcheck:
@@ -78,6 +82,35 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
+  # Database - Flask API for database operations
+  # ---------------------------------------------------------------------------
+  database:
+    build:
+      context: .
+      dockerfile: src/database/Containerfile
+    container_name: pontifex-database
+    restart: unless-stopped
+    ports:
+      - "${DATABASE_PORT:-13110}:${DATABASE_PORT:-13110}"
+    env_file:
+      - secrets/database.env
+    environment:
+      # Server port (override via database.env or .env)
+      PORT: ${DATABASE_PORT:-13110}
+      # SQLite database file path (inside the container)
+      DB_PATH: ${DB_PATH:-/app/data/pontifex.db}
+      # Peer check interval
+      PEER_CHECK_INTERVAL_SECONDS: ${PEER_CHECK_INTERVAL_SECONDS:-30}
+    volumes:
+      # TLS certificates (mounted from secrets/certs/database)
+      - ./secrets/certs/database:/run/secrets:ro
+      # SQLite database persistence
+      - sqlite_data:/app/data
+    networks:
+      - pontifex-net
+
+  # ---------------------------------------------------------------------------
+  # Frontend - Flask UI (HTTPS, published on FRONTEND_BIND_ADDRESS:FRONTEND_PORT)
   # Wake relay – the only container in the host network
   # ---------------------------------------------------------------------------
   wake-relay:
@@ -118,15 +151,23 @@ services:
     restart: unless-stopped
     ports:
       - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-8443}:8443"
+    env_file:
+      - secrets/frontend.env
     environment:
+      # Frontend bind address and port
+      FRONTEND_BIND_ADDRESS: ${FRONTEND_BIND_ADDRESS:-127.0.0.1}
+      FRONTEND_PORT: ${FRONTEND_PORT:-8443}
+      # URL where the backend can be reached (for peer monitoring)
       # Only the secret shared with the backend; no JWT secret, no database secret
       BACKEND_FRONTEND_SECRET: ${BACKEND_FRONTEND_SECRET}
       # Where the frontend reaches the backend (set it too if PORT is changed)
       BACKEND_URL: ${BACKEND_URL:-https://backend:7337}
+      # Peer check interval
       PEER_CHECK_INTERVAL_SECONDS: ${PEER_CHECK_INTERVAL_SECONDS:-30}
       # Extra names/IPs in the self-signed certificate (used on first start only)
       TLS_EXTRA_SANS: ${TLS_EXTRA_SANS:-}
     volumes:
+      # TLS certificates (generated on first startup by Containerfile)
       - frontend_tls_certs:/app/certs
     networks:
       - pontifex-net
@@ -144,6 +185,11 @@ services:
 # Named volumes
 # =============================================================================
 volumes:
+  # SQLite database volume (shared between backend and database for simplicity)
+  sqlite_data:
+    driver: local
+
+  # TLS certificates for frontend (auto-generated on first startup)
   # Persistent TLS certificate and private key of the backend
   tls_certs:
     driver: local
