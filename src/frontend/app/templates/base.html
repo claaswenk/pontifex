@@ -4,31 +4,48 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Pontifex{% endblock %} - Pontifex</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='img/favicon-32.png') }}">
+  <link rel="icon" type="image/png" sizes="64x64" href="{{ url_for('static', filename='img/favicon-64.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+  <svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false">
+    <symbol id="icon-device" viewBox="0 0 24 24">
+      <path fill-rule="evenodd" d="M3 4h18a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v9h16V6H4z"/>
+    </symbol>
+  </svg>
   <header class="topbar">
     <div class="topbar__inner">
       <a class="brand" href="{{ url_for('devices') }}">Pontifex</a>
+      {% if user %}
       <nav aria-label="Main">
         <a href="{{ url_for('devices') }}"{% if active == 'devices' %} aria-current="page"{% endif %}>Devices</a>
-        <a href="{{ url_for('account') }}"{% if active == 'account' %} aria-current="page"{% endif %}>Account</a>
+        {% if user.role == 'admin' %}
+        <a href="{{ url_for('users') }}"{% if active == 'users' %} aria-current="page"{% endif %}>Users</a>
+        {% endif %}
+        <a href="{{ url_for('account') }}"{% if active == 'account' %} aria-current="page"{% endif %}>
+          <span class="avatar avatar--small avatar--{{ user.role }}" aria-hidden="true">{{ user.username[:1] | upper }}</span>Account
+        </a>
+        <form method="post" action="{{ url_for('logout') }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="nav-button">Sign out</button>
+        </form>
       </nav>
+      {% endif %}
     </div>
   </header>
 
   <main class="page">
-    {% if preview %}
-    <p class="notice" role="note">
-      <strong>Preview.</strong> This page shows sample data. It is not connected to the backend yet.
-    </p>
-    {% endif %}
+    {% for kind, text in flashes %}
+    <p class="notice notice--{{ kind }}" role="{{ 'alert' if kind == 'error' else 'status' }}">{{ text }}</p>
+    {% endfor %}
     {% block content %}{% endblock %}
   </main>
 
   <footer class="footer">
     <span>pontifex-frontend</span>
-    <span>Server time {{ server_time }}</span>
+    <span>Server time <time id="server-time" data-epoch="{{ server_epoch }}">{{ server_time }}</time></span>
   </footer>
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

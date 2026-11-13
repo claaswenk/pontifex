@@ -1,74 +1,40 @@
-import datetime
-
-from flask import Flask, jsonify, redirect, render_template, url_for
-
-# Sample data for the layout preview. Replaced by the backend (/api/metrics and
-# the account data) once login and the database are connected. Until then no
-# real information is shown, so the pages need no authentication.
-SAMPLE_DEVICES = [
-    {"name": "NAS", "address": "192.168.1.10", "status": "online", "latency_ms": 2.4},
-    {"name": "Desktop PC", "address": "192.168.1.21", "status": "online", "latency_ms": 5.1},
-    {"name": "Media server", "address": "192.168.1.30", "status": "offline", "latency_ms": None},
-    {"name": "Printer", "address": "192.168.1.45", "status": "offline", "latency_ms": None},
-]
-SAMPLE_ACCOUNT = {"username": "demo", "role": "user", "token_minutes": 5}
+from flask import Flask, jsonify
 
 
-def _server_time() -> str:
-    now = datetime.datetime.now(datetime.timezone.utc)
-    return now.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-
-def create_app() -> Flask:
+def create_app(backend=None, sessions=None) -> Flask:
+    """``backend`` and ``sessions`` can be replaced in tests; in production they are built from the environment."""
     app = Flask(__name__)
+    # No upload is ever expected: forms are tiny.
+    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
     from app.auth import FrontendAuth
+    from app.pages import register_pages
+    from app.services import BackendClient, SessionStore
 
     auth = FrontendAuth()
     auth.validate_config()
     auth.init_app(app)
     app.extensions["auth"] = auth
 
+    sessions = SessionStore() if sessions is None else sessions
+    backend = BackendClient.from_env(auth.container) if backend is None else backend
+    app.extensions["sessions"] = sessions
+    register_pages(app, sessions, backend)
+
     @app.after_request
     def set_security_headers(response):
         response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; style-src 'self'; img-src 'self'; "
-            "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
         )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        if not response.headers.get("Cache-Control"):
+            # Pages show account data: neither the browser nor a proxy may keep them.
+            response.headers["Cache-Control"] = "no-store"
         return response
-
-    @app.route("/")
-    def index():
-        return redirect(url_for("devices"))
-
-    @app.route("/devices")
-    def devices():
-        online = sum(1 for d in SAMPLE_DEVICES if d["status"] == "online")
-        return render_template(
-            "devices.html",
-            active="devices",
-            preview=True,
-            server_time=_server_time(),
-            devices=SAMPLE_DEVICES,
-            summary={
-                "total": len(SAMPLE_DEVICES),
-                "online": online,
-                "offline": len(SAMPLE_DEVICES) - online,
-            },
-        )
-
-    @app.route("/account")
-    def account():
-        return render_template(
-            "account.html",
-            active="account",
-            preview=True,
-            server_time=_server_time(),
-            account={**SAMPLE_ACCOUNT, "device_count": len(SAMPLE_DEVICES)},
-        )
 
     @app.route("/health")
     def health():
