@@ -120,6 +120,7 @@ curl -k -X PUT https://localhost:7337/api/users/<username> \
     "password": "<>"
   }'
 ```
+
 10a. Forgot password, step 1 (admin): issue a one-time reset token for a user and hand it to them over a trusted channel
 ```
 curl -k -X POST https://localhost:7337/api/users/<username>/reset-token \
@@ -141,7 +142,7 @@ curl -k -X POST https://localhost:7337/api/reset-password \
 
 Response `200`: `{"status": "ok"}`. All sessions of the user end; they log in again with the new password.
 `401` for an unknown, used or expired token, `400` for an invalid password (the token stays valid).
-Wrong tokens count per address: after 30 failures `429`. Changing the password, renaming or deleting the user also voids a pending token.
+Wrong tokens count per address: after 5 failures `429` (15 minutes). Changing the password, renaming or deleting the user also voids a pending token.
 
 
 
