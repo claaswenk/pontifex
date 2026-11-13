@@ -663,5 +663,59 @@ class AccountTest(FrontendCase):
         self.assertNotIn("secret-current", self.page("/account"))
 
 
+class InputValidationTest(FrontendCase):
+    """Form input is checked before it is used; over-long input is refused, never cut."""
+
+    def setUp(self):
+        super().setUp()
+        self.sign_in("root")
+        self.transport.calls.clear()
+
+    def test_an_overlong_field_is_refused_and_not_forwarded_cut_short(self):
+        for path, data in (
+            ("/users", {"username": "a" * 300, "password": PW}),
+            ("/users", {"username": "bob", "password": "p" * 5000}),
+            ("/devices", {"name": "n" * 500, "address": "10.0.0.2", "mac": "aa:bb:cc:dd:ee:01"}),
+            ("/devices", {"name": "nas", "address": "10.0.0.2", "mac": "a" * 500}),
+            ("/users/anna/password", {"password": "p" * 5000}),
+        ):
+            with self.subTest(path=path, field=list(data)[0]):
+                self.assertEqual(self.post(path, data).status_code, 400)
+        self.assertEqual([c for c in self.transport.calls if c[0] != "GET"], [])
+
+    def test_a_nul_byte_never_reaches_the_backend(self):
+        self.assertEqual(self.post("/devices", {"name": "a\x00b", "address": "10.0.0.2", "mac": "x"}).status_code, 400)
+        self.assertEqual(self.transport.calls_to("POST", "/api/devices"), [])
+
+    def test_login_with_hostile_input_is_the_generic_failure_and_not_forwarded(self):
+        other = self.app.test_client()
+        self.get("/login", other)
+        for username, password in (("a" * 100, PW), ("root", "p" * 2000), ("ro\x00ot", PW)):
+            with self.subTest(username=username[:6]):
+                response = self.post("/login", {"username": username, "password": password}, other)
+                self.assertEqual(response.status_code, 303)
+                self.assertIn("Invalid username or password.", self.page("/login", other))
+        self.assertEqual(self.transport.calls_to("POST", "/api/login"), [])
+
+    def test_a_session_cookie_that_we_could_not_have_issued_is_just_no_session(self):
+        other = self.app.test_client()
+        for value in ("x" * 500, "a b", "a;b", "' OR 1=1 --", "../x"):
+            with self.subTest(cookie=value[:10]):
+                other.set_cookie(COOKIE, value, domain="localhost")
+                self.assertEqual(self.get("/devices", other).status_code, 302)
+
+    def test_a_csrf_token_with_odd_content_is_refused(self):
+        for token in ("x" * 500, "a b", "' OR 1=1 --", "\x00"):
+            with self.subTest(token=token[:10]):
+                response = self.client.post("/logout", data={"csrf_token": token}, base_url=HTTPS)
+                self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.get("/devices").status_code, 200)
+
+    def test_user_names_in_paths_follow_the_backend_rule_exactly(self):
+        self.transport.routes[("DELETE", "/api/users/anna.k")] = lambda b, t: (200, {"username": "anna.k"})
+        self.post("/users/anna.k/delete")
+        self.assertEqual(len(self.transport.calls_to("DELETE", "/api/users/anna.k")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
