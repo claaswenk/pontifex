@@ -275,7 +275,8 @@ class SessionAndCookieTest(FrontendCase):
             body = body.lower()
             self.assertIn("<html", body)
             # The one allowed script is the external file; nothing inline.
-            self.assertEqual(re.findall(r"<script[^>]*>", body), ['<script src="/static/app.js" defer>'])
+            scripts = [tag.lower() for tag in re.findall(r"<script[^>]*>", body, flags=re.IGNORECASE)]
+            self.assertEqual(scripts, ['<script src="/static/app.js" defer>'])
             for forbidden in ("style=", "onclick", "onsubmit", "onload", "javascript:"):
                 self.assertNotIn(forbidden, body)
 
