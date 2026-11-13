@@ -75,6 +75,34 @@ class BackendAuth(BaseAuth):
         refresh_token = self.database.create_refresh_token(username)
         return refresh_token, self.issue_access_token(username, credentials["role"])
 
+    def change_own_username(
+        self, username: str, current: str, new_username: str, address: str
+    ) -> tuple[str, str] | None:
+        """
+        Rename the caller's account after proving the current password. Returns a
+        fresh (refresh_token, access_token) for the new name, or None if the
+        current password is wrong. Raises ValueError if the new name is not
+        available (taken, or the caller's own name).
+
+        The role is never touched. Wrong guesses count against the login limit.
+        """
+        self.throttle.check(username, address)
+
+        credentials = self.database.get_credentials(username)
+        if credentials is None or not self.verify_password(current, credentials["pw_hash"]):
+            self.throttle.failure(username, address)
+            return None
+
+        self.throttle.success(username, address)
+        if new_username == username:
+            raise ValueError("same name")
+        if not self.database.rename_user(username, new_username):
+            return None
+        # Revokes every old session; the old access token stops working because
+        # its subject no longer exists.
+        refresh_token = self.database.create_refresh_token(new_username)
+        return refresh_token, self.issue_access_token(new_username, credentials["role"])
+
     def delete_own_account(self, username: str, current: str, address: str) -> bool:
         """
         Delete the caller's account (with devices and sessions) after proving

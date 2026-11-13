@@ -131,6 +131,7 @@ class DatabaseClientStubTest(unittest.TestCase):
             lambda: client.get_credentials("a"),
             client.list_users,
             lambda: client.set_password("a", "h"),
+            lambda: client.rename_user("a", "b"),
             lambda: client.delete_user("a"),
             lambda: client.create_refresh_token("a"),
             lambda: client.revoke_refresh_token("x"),

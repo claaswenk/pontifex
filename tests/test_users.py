@@ -171,6 +171,114 @@ class UserManagementTest(unittest.TestCase):
         right = {"current_password": PW, "new_password": PW2}
         self.assertEqual(self.client.put("/api/me/password", json=right, headers=headers).status_code, 429)
 
+    # -- change own username ---------------------------------------------------------
+
+    def _rename(self, headers, new="annika", password=PW):
+        return self.client.patch(
+            "/api/me", json={"username": new, "current_password": password}, headers=headers)
+
+    def test_user_renames_self_and_keeps_role_devices_and_password(self):
+        self._add()
+        old = self.client.post("/api/login", json={"username": "anna", "password": PW}).get_json()
+        headers = {"Authorization": f"Bearer {old['access_token']}"}
+        self.db.create_device("anna", "nas", "192.168.1.10", "00:11:22:33:44:55")
+
+        r = self._rename(headers, "  Annika.K ")
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertEqual((body["username"], body["role"]), ("annika.k", "user"))
+
+        fresh = {"Authorization": f"Bearer {body['access_token']}"}
+        me = self.client.get("/api/me", headers=fresh).get_json()
+        self.assertEqual((me["username"], me["role"]), ("annika.k", "user"))
+        self.assertEqual([d["name"] for d in self.db.list_devices("annika.k")], ["nas"])
+        self.assertEqual(self.db.list_devices("anna"), [])
+        self.assertEqual(self.client.post("/api/login", json={"username": "annika.k", "password": PW}).status_code, 200)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW}).status_code, 401)
+
+    def test_rename_ends_old_sessions(self):
+        self._add()
+        old = self.client.post("/api/login", json={"username": "anna", "password": PW}).get_json()
+        headers = {"Authorization": f"Bearer {old['access_token']}"}
+        fresh = self._rename(headers).get_json()
+        self.assertEqual(self.client.get("/api/me", headers=headers).status_code, 401)
+        self.assertEqual(self.client.post("/api/token", json={"refresh_token": old["refresh_token"]}).status_code, 401)
+        self.assertEqual(self.client.post("/api/token", json={"refresh_token": fresh["refresh_token"]}).status_code, 200)
+
+    def test_role_cannot_be_changed(self):
+        self._add()
+        headers = self._user_headers()
+        for body in (
+            {"role": "admin"},
+            {"username": "annika", "current_password": PW, "role": "admin"},
+            {"username": "annika", "current_password": PW, "role": "user"},
+        ):
+            with self.subTest(body=str(body)):
+                self.assertEqual(self.client.patch("/api/me", json=body, headers=headers).status_code, 403)
+        me = self.client.get("/api/me", headers=headers).get_json()
+        self.assertEqual((me["username"], me["role"]), ("anna", "user"))
+
+    def test_admin_can_rename_but_stays_admin(self):
+        r = self._rename(self.admin, "boss")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["role"], "admin")
+        self.assertEqual(self.db.get_credentials("boss")["role"], "admin")
+        self.assertFalse(self.db.exists("root"))
+
+    def test_rename_needs_the_current_password(self):
+        self._add()
+        headers = self._user_headers()
+        for body in (
+            {"username": "annika", "current_password": "wrong-wrong-wrong"},
+            {"username": "annika"},
+            {"username": "annika", "current_password": 5},
+            {"username": "annika", "current_password": ""},
+        ):
+            with self.subTest(body=str(body)):
+                self.assertEqual(self.client.patch("/api/me", json=body, headers=headers).status_code, 403)
+        self.assertTrue(self.db.exists("anna"))
+
+    def test_rename_rejects_taken_same_and_invalid_names(self):
+        self._add()
+        self._add("bernd")
+        headers = self._user_headers()
+        for name in ("bernd", "root", "BERND", "anna", " Anna "):
+            with self.subTest(name=name):
+                self.assertEqual(self._rename(headers, name).status_code, 409)
+        for name in ("", "ab", "a b", "../x", "x" * 65, 5, None, ["a"]):
+            with self.subTest(name=name):
+                self.assertEqual(self._rename(headers, name).status_code, 400)
+        self.assertTrue(self.db.exists("anna"))
+        self.assertTrue(self.db.exists("bernd"))
+
+    def test_rename_rejects_other_fields_and_bad_bodies(self):
+        self._add()
+        headers = self._user_headers()
+        self.assertEqual(self.client.patch("/api/me", json={"current_password": PW}, headers=headers).status_code, 400)
+        self.assertEqual(
+            self.client.patch("/api/me", json={"username": "annika", "current_password": PW, "email": "a@b.c"},
+                              headers=headers).status_code, 400)
+        self.assertEqual(self.client.patch("/api/me", json=["annika"], headers=headers).status_code, 400)
+        self.assertEqual(self.client.patch("/api/me", data="not json", headers=headers).status_code, 400)
+
+    def test_rename_needs_a_token(self):
+        self.assertEqual(self.client.patch("/api/me", json={"username": "annika", "current_password": PW}).status_code, 401)
+
+    def test_guessing_the_password_to_rename_is_throttled(self):
+        self._add()
+        headers = self._user_headers()
+        for _ in range(5):
+            self.assertEqual(self._rename(headers, password="wrong-wrong-wrong").status_code, 403)
+        self.assertEqual(self._rename(headers, password="wrong-wrong-wrong").status_code, 429)
+        self.assertEqual(self._rename(headers).status_code, 429)
+        self.assertTrue(self.db.exists("anna"))
+
+    def test_rename_when_database_is_down_is_503(self):
+        self._add()
+        headers = self._user_headers()
+        self.db.down = True
+        self.assertEqual(self._rename(headers).status_code, 503)
+
     # -- delete own account ----------------------------------------------------------
 
     def _delete_me(self, headers, password=PW):

@@ -49,6 +49,14 @@ class DatabaseClient:
         """Replace the password hash and revoke every refresh token of the user. False if unknown."""
         raise NotImplementedError
 
+    def rename_user(self, username: str, new_username: str) -> bool:
+        """
+        Change the name of an account. Its identity, role, password, devices stay
+        as they are; every refresh token of the user is revoked.
+        Raises ValueError if ``new_username`` is taken. False if ``username`` is unknown.
+        """
+        raise NotImplementedError
+
     def delete_user(self, username: str) -> bool:
         """Delete the user together with their devices and refresh tokens. False if unknown."""
         raise NotImplementedError

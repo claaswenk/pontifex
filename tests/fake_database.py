@@ -86,6 +86,18 @@ class FakeDatabase:
         self.tokens = {t: u for t, u in self.tokens.items() if u != username}
         return True
 
+    def rename_user(self, username, new_username):
+        self._check()
+        if username not in self.accounts:
+            return False
+        if new_username in self.accounts:
+            raise ValueError("taken")
+        self.accounts[new_username] = self.accounts.pop(username)
+        if username in self.owned:
+            self.owned[new_username] = self.owned.pop(username)
+        self.tokens = {t: u for t, u in self.tokens.items() if u != username}
+        return True
+
     def delete_user(self, username):
         self._check()
         if username not in self.accounts:

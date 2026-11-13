@@ -317,6 +317,59 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         }), 200
 
     # -----------------------------------------------------------------------
+    # PATCH /api/me  (any signed-in user, needs the current password)
+    # Changes the username. The role can never be changed: not here, not by the
+    # user. Ends all sessions, so a fresh token pair for the new name is returned.
+    # -----------------------------------------------------------------------
+
+    @api_bp.route("/me", methods=["PATCH"])
+    @auth.require_role("admin", "user")
+    def update_own_account():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "A JSON object is required."}), 400
+
+        if "role" in data:
+            return jsonify({"error": "The role cannot be changed."}), 403
+        unknown = set(data) - {"username", "current_password"}
+        if unknown:
+            return jsonify({"error": "Only 'username' can be changed."}), 400
+        if "username" not in data:
+            return jsonify({"error": "Field 'username' is required."}), 400
+
+        new_username = _normalized_username(data.get("username"))
+        if new_username is None:
+            return jsonify({"error": USERNAME_RULE}), 400
+
+        current = data.get("current_password")
+        if not isinstance(current, str) or not current or len(current) > MAX_PASSWORD_LENGTH:
+            return jsonify({"error": "Current password is wrong."}), 403
+
+        try:
+            tokens = auth.change_own_username(
+                g.current_user["sub"], current, new_username, request.remote_addr or "unknown"
+            )
+        except LoginThrottled as exc:
+            logger.warning("Username change throttled")
+            response = jsonify({"error": "Too many failed attempts. Try again later."})
+            response.headers["Retry-After"] = str(exc.retry_after)
+            return response, 429
+        except ValueError:
+            return jsonify({"error": "Unable to change the username to the provided value."}), 409
+
+        if tokens is None:
+            return jsonify({"error": "Current password is wrong."}), 403
+
+        refresh_token, access_token = tokens
+        return jsonify({
+            "username":      new_username,
+            "role":          g.current_user["role"],
+            "refresh_token": refresh_token,
+            "access_token":  access_token,
+            "expires_in":    300,
+        }), 200
+
+    # -----------------------------------------------------------------------
     # DELETE /api/me  (any signed-in regular user, needs the current password)
     # Removes the account with its devices and sessions. The admin can create
     # the user again with POST /api/users. The admin account itself stays.
