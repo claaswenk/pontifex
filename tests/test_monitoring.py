@@ -8,17 +8,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "src"), os.path.join(ROOT, "src", "backend")]
 
 from app import services  # noqa: E402
-from tests.test_auth import FakeDatabase, PW, SECRETS  # noqa: E402
+from tests.fake_database import FakeDatabase  # noqa: E402
+from tests.test_auth import PW, SECRETS  # noqa: E402
 
 
 class FakeDeviceDatabase(FakeDatabase):
-    def __init__(self):
-        super().__init__()
-        self.devices = {}  # username -> [{"name", "address"}]
+    @property
+    def devices(self):
+        return self.owned
 
-    def list_devices(self, username):
-        self._check()
-        return self.devices.get(username, [])
+    @devices.setter
+    def devices(self, value):
+        self.owned = value
 
 
 class SystemStatsTest(unittest.TestCase):
