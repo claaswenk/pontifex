@@ -3,6 +3,9 @@ Replace `<>` with your value. Authentication is always `Authorization: Bearer <t
 
 Errors are generic on purpose: `401` for every failed login, `404` for a device that is not yours,
 `503` when the database or the wake relay is unavailable.
+Every input is validated first (see `src/shared/input_validator.py`). A refused value answers `400` with the
+rule of the field, except where a different answer is safer: `401` for a malformed login or token, `403` for an
+unusable current password, `404` for a malformed username or id in the URL. Request bodies must be JSON objects.
 
 ---
 

@@ -12,6 +12,8 @@ import time
 
 import psutil
 
+from shared.input_validator import InputValidator, InvalidInput
+
 logger = logging.getLogger(__name__)
 
 # Worst case (every device offline): devices * ports * timeout / workers seconds
@@ -400,60 +402,33 @@ class LoginThrottle:
 # ---------------------------------------------------------------------------
 # Input rules for devices
 #
-# Pure syntax checks: no name is resolved and nothing is contacted. Resolving
-# and the refusal of loopback and similar targets happen when a device is
-# probed (_resolve_safe_ip).
+# The rules live in shared.input_validator. These helpers keep the old
+# "value or None" shape for code that does not want an exception. Pure syntax
+# checks: no name is resolved and nothing is contacted. Resolving and the
+# refusal of loopback and similar targets happen when a device is probed
+# (_resolve_safe_ip).
 # ---------------------------------------------------------------------------
 
-MAX_NAME_LENGTH = 64
-MAX_ADDRESS_LENGTH = 253
 MAX_DEVICES_PER_USER = 100
 
-NAME_RULE = f"Name must be 1-{MAX_NAME_LENGTH} characters without control characters."
-ADDRESS_RULE = "Address must be a host name or an IPv4/IPv6 address that is not loopback, link-local or multicast."
-MAC_RULE = "MAC must be six hex pairs such as AA:BB:CC:DD:EE:FF and must be a unicast address."
 
-_MAC_DIGITS = re.compile(r"[0-9a-f]{12}")
+def _or_none(check, value):
+    try:
+        return check(value)
+    except InvalidInput:
+        return None
 
 
 def valid_name(value) -> str | None:
     """The trimmed name, or None if it is not acceptable."""
-    if not isinstance(value, str):
-        return None
-    name = value.strip()
-    if not name or len(name) > MAX_NAME_LENGTH or any(ord(c) < 32 or ord(c) == 127 for c in name):
-        return None
-    return name
+    return _or_none(InputValidator.device_name, value)
 
 
 def valid_address(value) -> str | None:
     """The trimmed host name or IP literal, or None if it is not acceptable."""
-    if not isinstance(value, str):
-        return None
-    address = value.strip()
-    if not address or len(address) > MAX_ADDRESS_LENGTH:
-        return None
-    try:
-        ip = ipaddress.ip_address(address)
-    except ValueError:
-        return address.lower() if _HOSTNAME.fullmatch(address) else None
-    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
-        return None
-    return str(ip)
+    return _or_none(InputValidator.address, value)
 
 
 def normalize_mac(value) -> str | None:
-    """``aa:bb:cc:dd:ee:ff`` for any common spelling, or None.
-
-    Accepts ``:``, ``-``, ``.`` or no separators. Rejects the broadcast and
-    all-zero addresses and group (multicast) addresses: a wake-up packet is
-    built from the MAC of one network card.
-    """
-    if not isinstance(value, str) or len(value) > 32:
-        return None
-    digits = re.sub(r"[:\-.]", "", value.strip()).lower()
-    if not _MAC_DIGITS.fullmatch(digits):
-        return None
-    if int(digits[1], 16) & 1 or digits == "0" * 12:  # group bit set (includes ff:ff:...)
-        return None
-    return ":".join(digits[i:i + 2] for i in range(0, 12, 2))
+    """``aa:bb:cc:dd:ee:ff`` for any common spelling, or None."""
+    return _or_none(InputValidator.mac, value)
