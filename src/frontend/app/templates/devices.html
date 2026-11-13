@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Devices{% endblock %}
+
+{% block content %}
+<h1>Devices</h1>
+<p class="lead">Your devices and whether they currently answer.</p>
+
+{% if load_failed %}
+<p class="notice notice--error" role="alert">The devices could not be loaded. Try again later.</p>
+{% endif %}
+
+<section class="tiles" aria-label="Summary">
+  <div class="tile">
+    <span class="tile__value">{{ summary.total }}</span>
+    <span class="tile__label">Total</span>
+  </div>
+  <div class="tile tile--online">
+    <span class="tile__value">{{ summary.online }}</span>
+    <span class="tile__label">Online</span>
+  </div>
+  <div class="tile tile--offline">
+    <span class="tile__value">{{ summary.offline }}</span>
+    <span class="tile__label">Offline</span>
+  </div>
+</section>
+
+<section class="panel" aria-label="Device list">
+  {% if devices %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Status</th>
+          <th scope="col">Name</th>
+          <th scope="col">Address</th>
+          <th scope="col" class="num">Latency</th>
+          <th scope="col" class="num">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for device in devices %}
+        <tr>
+          <td>
+            <span class="status status--{{ 'online' if device.status == 'online' else 'offline' }}">
+              <span class="dot" aria-hidden="true"></span>{{ 'Online' if device.status == 'online' else 'Offline' }}
+            </span>
+          </td>
+          <td>
+            <span class="device-name">
+              <svg class="device-icon device-icon--{{ 'online' if device.status == 'online' else 'offline' }}" width="28" height="28" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-device"/></svg>
+              <span>{{ device.name }}</span>
+            </span>
+          </td>
+          <td><code>{{ device.address }}</code></td>
+          <td class="num">{% if device.latency_ms is not none %}{{ device.latency_ms }} ms{% else %}-{% endif %}</td>
+          <td class="num actions">
+            {% if device.id is not none %}
+            <form method="post" action="{{ url_for('wake_device', device_id=device.id) }}" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="button button--small">Wake</button>
+            </form>
+            <form method="post" action="{{ url_for('delete_device', device_id=device.id) }}" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="button button--small button--danger">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif not load_failed %}
+  <p class="empty">No devices yet. Add the first one below.</p>
+  {% endif %}
+</section>
+
+<section class="panel spaced" aria-labelledby="add-title">
+  <h2 id="add-title">Add a device</h2>
+  <form method="post" action="{{ url_for('add_device') }}" class="form form--row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div>
+      <label for="name">Name</label>
+      <input id="name" name="name" type="text" maxlength="64" required>
+    </div>
+    <div>
+      <label for="address">Address</label>
+      <input id="address" name="address" type="text" maxlength="253" placeholder="192.168.1.10" required>
+    </div>
+    <div>
+      <label for="mac">MAC address</label>
+      <input id="mac" name="mac" type="text" maxlength="17" placeholder="aa:bb:cc:dd:ee:ff" required>
+    </div>
+    <button type="submit" class="button">Add device</button>
+  </form>
+  <p class="hint">The MAC address is needed for Wake-on-LAN. Online means that the device answers on a common port (SSH, web, SMB or RDP).</p>
+</section>
+{% endblock %}

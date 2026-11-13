@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+
+{% block content %}
+<h1>Users</h1>
+<p class="lead">Only the administrator sees this page.</p>
+
+{% if load_failed %}
+<p class="notice notice--error" role="alert">The users could not be loaded. Try again later.</p>
+{% endif %}
+
+<section class="panel" aria-label="User list">
+  {% if users %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Username</th>
+          <th scope="col">Role</th>
+          <th scope="col">New password</th>
+          <th scope="col" class="num">Delete</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in users %}
+        <tr>
+          <td>{{ entry.username }}</td>
+          <td><span class="badge">{{ entry.role }}</span></td>
+          <td>
+            {% if entry.username != user.username %}
+            <form method="post" action="{{ url_for('reset_password', name=entry.username) }}" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <label class="sr-only" for="pw-{{ loop.index }}">New password for {{ entry.username }}</label>
+              <input id="pw-{{ loop.index }}" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" placeholder="12+ characters" required>
+              <button type="submit" class="button button--small">Set</button>
+            </form>
+            {% else %}
+            <span class="hint">Use the account page</span>
+            {% endif %}
+          </td>
+          <td class="num">
+            {% if entry.role != 'admin' %}
+            <form method="post" action="{{ url_for('delete_user', name=entry.username) }}" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="button button--small button--danger">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif not load_failed %}
+  <p class="empty">No users.</p>
+  {% endif %}
+</section>
+
+<section class="panel spaced" aria-labelledby="add-user-title">
+  <h2 id="add-user-title">Add a user</h2>
+  <form method="post" action="{{ url_for('add_user') }}" class="form form--row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div>
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="off" maxlength="64" required>
+    </div>
+    <div>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+    </div>
+    <button type="submit" class="button">Add user</button>
+  </form>
+  <p class="hint">Username: 3-64 characters, lower case letters, digits, '.', '_' or '-'. Password: at least 12 characters. Deleting a user also deletes their devices.</p>
+</section>
+{% endblock %}

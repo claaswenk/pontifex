@@ -1,6 +1,9 @@
 """Backend authentication: user accounts, refresh tokens and the admin bootstrap."""
 
+import hashlib
 import os
+import secrets
+import time
 from functools import wraps
 
 from flask import jsonify
@@ -8,12 +11,20 @@ from flask import jsonify
 from shared.auth import BaseAuth
 from shared.errors import BootstrapConsumedError
 from app.database_client import DatabaseClient
+from app.services import LoginThrottle, LoginThrottled
 
 __all__ = ["BackendAuth", "BootstrapConsumedError"]
 
 
 class BackendAuth(BaseAuth):
     INITIAL_KEY_ENV = "INITIAL_API_KEY"
+
+    # A reset token is valid once, for this long. It is never stored in clear:
+    # only its SHA-256 goes to the database (it is 256 bits of randomness, so a
+    # fast hash is enough).
+    RESET_TOKEN_TTL_SECONDS = 900
+    # Not a valid username, so it cannot collide with a real account's counter.
+    _RESET_THROTTLE_KEY = "<password-reset>"
 
     CONTAINER_ID = "backend"
     PEERS = ("frontend", "database")
@@ -25,6 +36,10 @@ class BackendAuth(BaseAuth):
     def __init__(self, database: DatabaseClient) -> None:
         super().__init__()
         self.database = database
+        self.throttle = LoginThrottle()
+        # Verified against when the username is unknown, so that an unknown
+        # name costs the same time as a wrong password.
+        self._dummy_hash = self.hash_password(secrets.token_urlsafe(16))
 
     def validate_config(self) -> None:
         super().validate_config()
@@ -39,12 +54,137 @@ class BackendAuth(BaseAuth):
         refresh_token = self.database.create_bootstrap_admin(username, self.hash_password(password))
         return refresh_token, self.issue_access_token(username, "admin")
 
-    def create_user(self, username: str, password: str, *, replacing_admin: str) -> tuple[str, str]:
-        """Create the service user and delete the calling admin in one transaction."""
-        refresh_token = self.database.create_user(
-            username, self.hash_password(password), "user", replacing=replacing_admin
-        )
-        return refresh_token, self.issue_access_token(username, "user")
+    def create_user(self, username: str, password: str) -> None:
+        """Add a regular user. The only admin is the bootstrap admin."""
+        self.database.create_user(username, self.hash_password(password), "user")
+
+    def set_password(self, username: str, password: str) -> bool:
+        return self.database.set_password(username, self.hash_password(password))
+
+    def change_own_password(
+        self, username: str, current: str, new: str, address: str
+    ) -> tuple[str, str] | None:
+        """
+        Change a password after proving the current one. Returns a fresh
+        (refresh_token, access_token), or None if the current password is wrong.
+
+        Wrong guesses count against the same limit as the login, so a stolen
+        access token cannot be used to guess the password.
+        """
+        self.throttle.check(username, address)
+
+        credentials = self.database.get_credentials(username)
+        if credentials is None or not self.verify_password(current, credentials["pw_hash"]):
+            self.throttle.failure(username, address)
+            return None
+
+        self.throttle.success(username, address)
+        # Revokes every refresh token of the user, on all devices.
+        self.database.set_password(username, self.hash_password(new))
+        refresh_token = self.database.create_refresh_token(username)
+        return refresh_token, self.issue_access_token(username, credentials["role"])
+
+    @staticmethod
+    def _hash_reset_token(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def create_reset_token(self, username: str) -> str | None:
+        """
+        Issue a one-time password reset token for ``username`` (replacing any
+        earlier one). Returns the token, shown only once, or None if the user
+        is unknown.
+        """
+        token = secrets.token_urlsafe(32)
+        expires_at = int(time.time()) + self.RESET_TOKEN_TTL_SECONDS
+        if not self.database.create_reset_token(username, self._hash_reset_token(token), expires_at):
+            return None
+        return token
+
+    def reset_password_with_token(self, token: str, new_password: str, address: str) -> bool:
+        """
+        Set a new password with a reset token and end every session of the user.
+        False for an unknown, used or expired token. Wrong tokens count against
+        a per-address limit, so tokens cannot be guessed.
+        """
+        self.throttle.check(self._RESET_THROTTLE_KEY, address)
+
+        # Hashed before the token is looked up, so a bad token costs the same time.
+        pw_hash = self.hash_password(new_password)
+        if not self.database.reset_password_with_token(self._hash_reset_token(token), pw_hash):
+            self.throttle.failure(self._RESET_THROTTLE_KEY, address)
+            return False
+        return True
+
+    def change_own_username(
+        self, username: str, current: str, new_username: str, address: str
+    ) -> tuple[str, str] | None:
+        """
+        Rename the caller's account after proving the current password. Returns a
+        fresh (refresh_token, access_token) for the new name, or None if the
+        current password is wrong. Raises ValueError if the new name is not
+        available (taken, or the caller's own name).
+
+        The role is never touched. Wrong guesses count against the login limit.
+        """
+        self.throttle.check(username, address)
+
+        credentials = self.database.get_credentials(username)
+        if credentials is None or not self.verify_password(current, credentials["pw_hash"]):
+            self.throttle.failure(username, address)
+            return None
+
+        self.throttle.success(username, address)
+        if new_username == username:
+            raise ValueError("same name")
+        if not self.database.rename_user(username, new_username):
+            return None
+        # Revokes every old session; the old access token stops working because
+        # its subject no longer exists.
+        refresh_token = self.database.create_refresh_token(new_username)
+        return refresh_token, self.issue_access_token(new_username, credentials["role"])
+
+    def delete_own_account(self, username: str, current: str, address: str) -> bool:
+        """
+        Delete the caller's account (with devices and sessions) after proving
+        the current password. False if the password is wrong.
+
+        Wrong guesses count against the same limit as the login, so a stolen
+        access token cannot be used to delete an account.
+        """
+        self.throttle.check(username, address)
+
+        credentials = self.database.get_credentials(username)
+        if credentials is None or not self.verify_password(current, credentials["pw_hash"]):
+            self.throttle.failure(username, address)
+            return False
+
+        self.throttle.success(username, address)
+        return self.database.delete_user(username)
+
+    def login(self, username: str, password: str, address: str) -> tuple[str, str, str] | None:
+        """
+        Check a username and password. Returns (refresh_token, access_token, role),
+        or None for every kind of failure (unknown user, wrong password).
+
+        Raises LoginThrottled when too many attempts failed recently.
+        """
+        self.throttle.check(username, address)
+
+        credentials = self.database.get_credentials(username)
+        stored_hash = credentials["pw_hash"] if credentials else self._dummy_hash
+        password_ok = self.verify_password(password, stored_hash)
+
+        if credentials is None or not password_ok:
+            self.throttle.failure(username, address)
+            return None
+
+        self.throttle.success(username, address)
+        refresh_token = self.database.create_refresh_token(credentials["username"])
+        access_token = self.issue_access_token(credentials["username"], credentials["role"])
+        return refresh_token, access_token, credentials["role"]
+
+    def logout(self, refresh_token: str) -> None:
+        self.database.revoke_refresh_token(refresh_token)
 
     def exchange_refresh_token(self, refresh_token: str) -> str | None:
         found = self.database.get_by_refresh_token(refresh_token)

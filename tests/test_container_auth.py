@@ -76,6 +76,11 @@ def frontend_app(auth: ContainerAuth) -> Flask:
     def echo():
         return jsonify({"got": request.get_json(silent=True)})
 
+    @app.route("/user/whoami")
+    def whoami():
+        # Like a require_role route: no container decorator, the user token decides.
+        return jsonify({"authorization": request.headers.get("Authorization", "")})
+
     return app
 
 
@@ -126,6 +131,46 @@ class ContainerAuthTest(unittest.TestCase):
             status, data = self.backend.client("frontend", server.url).request(
                 "POST", "/internal/echo", {"a": 1})
         self.assertEqual((status, data), (200, {"got": {"a": 1}}))
+
+    def test_user_token_travels_with_the_signed_request_and_response_is_proven(self):
+        with Server(frontend_app(self.server_auth), self.cert, self.key) as server:
+            status, data = self.backend.client("frontend", server.url).request(
+                "GET", "/user/whoami", headers={"Authorization": "Bearer abc"})
+        self.assertEqual((status, data), (200, {"authorization": "Bearer abc"}))
+
+    def test_extra_headers_cannot_override_the_signature(self):
+        with Server(frontend_app(self.server_auth), self.cert, self.key) as server:
+            client = self.backend.client("frontend", server.url)
+            status, _ = client.request(
+                "GET", "/internal/ping", headers={ca.HEADER_SIGNATURE: "0" * 64, ca.HEADER_ID: "x"})
+        self.assertEqual(status, 200)
+
+    def test_token_route_without_container_headers_still_works_and_gets_no_proof(self):
+        with Server(frontend_app(self.server_auth), self.cert, self.key) as server:
+            status, headers, _ = raw_request(
+                server.port, "GET", "/user/whoami", {"Authorization": "Bearer abc"})
+        self.assertEqual(status, 200)
+        self.assertNotIn(ca.HEADER_PROOF, headers)
+
+    def test_wrongly_signed_request_on_a_token_route_is_rejected(self):
+        headers = self.backend.sign_request("frontend", "GET", "/user/whoami", b"", "0" * 64)
+        headers["Authorization"] = "Bearer abc"
+        with Server(frontend_app(self.server_auth), self.cert, self.key) as server:
+            status, response_headers, _ = raw_request(server.port, "GET", "/user/whoami", headers)
+        self.assertEqual(status, 401)
+        self.assertNotIn(ca.HEADER_PROOF, response_headers)
+
+    def test_token_route_response_from_an_impostor_is_rejected(self):
+        evil = Flask("evil")
+
+        @evil.route("/user/whoami")
+        def whoami():
+            return jsonify({"authorization": "Bearer abc"})
+
+        with Server(evil, self.evil_cert, self.evil_key) as server:
+            with self.assertRaises(ContainerAuthError):
+                self.backend.client("frontend", server.url).request(
+                    "GET", "/user/whoami", headers={"Authorization": "Bearer abc"})
 
     # --- the server must reject ------------------------------------------
 
@@ -299,6 +344,62 @@ class PublicApiStaysIndependentTest(unittest.TestCase):
         })
         self.assertIn(response.status_code, (401, 503))
         self.assertNotIn(ca.HEADER_PROOF, response.headers)
+
+
+class FrontendCallsBackendTest(unittest.TestCase):
+    """The real backend app over TLS: the frontend forwards a user token and verifies the answer."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.cert, cls.key = make_cert(cls.tmp.name, "backend")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        os.environ.update(
+            {"BACKEND_FRONTEND_SECRET": FRONTEND_SECRET, "BACKEND_DATABASE_SECRET": DATABASE_SECRET},
+            JWT_SECRET="test-jwt-secret-with-at-least-32-bytes",
+            INITIAL_API_KEY="initial-key",
+            TLS_CERT_PATH=self.cert,
+        )
+        from app import create_app
+        from tests.fake_database import FakeDatabase
+        self.db = FakeDatabase()
+        self.app = create_app(database=self.db)
+        self.frontend = ContainerAuth("frontend", ("backend",))
+        self.addCleanup(os.environ.pop, "TLS_CERT_PATH", None)
+
+    def _admin_token(self):
+        auth = self.app.extensions["auth"]
+        self.db.create_bootstrap_admin("root", auth.hash_password("a-long-enough-password"))
+        return auth.issue_access_token("root", "admin")
+
+    def test_token_route_returns_data_and_a_verified_proof(self):
+        token = self._admin_token()
+        with Server(self.app, self.cert, self.key) as server:
+            status, data = self.frontend.client("backend", server.url).request(
+                "GET", "/api/me", headers={"Authorization": f"Bearer {token}"})
+        self.assertEqual((status, data["username"], data["role"]), (200, "root", "admin"))
+
+    def test_error_answers_of_a_token_route_are_proven_too(self):
+        with Server(self.app, self.cert, self.key) as server:
+            status, _ = self.frontend.client("backend", server.url).request(
+                "GET", "/api/me", headers={"Authorization": "Bearer invalid"})
+        self.assertEqual(status, 401)
+
+    def test_frontend_without_the_right_secret_is_rejected_by_the_backend(self):
+        token = self._admin_token()
+        wrong = ContainerAuth("frontend", ("backend",))
+        wrong._secret = lambda peer: b"x" * 40
+        with Server(self.app, self.cert, self.key) as server:
+            status, _, _ = raw_request(
+                server.port, "GET", "/api/me",
+                {**wrong.sign_request("backend", "GET", "/api/me", b"", fingerprint_of_pem_file(self.cert)),
+                 "Authorization": f"Bearer {token}"})
+        self.assertEqual(status, 401)
 
 
 if __name__ == "__main__":

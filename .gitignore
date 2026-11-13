@@ -224,3 +224,14 @@ certs/
 *.pem
 *.key
 *.crt
+
+# Secrets directory
+secrets/
+
+# Environment files (except templates)
+.env
+.env.*
+!*.env.example
+
+# Container secrets
+*.secret

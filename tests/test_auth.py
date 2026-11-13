@@ -7,75 +7,27 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "src"), os.path.join(ROOT, "src", "backend")]
 
 from shared.auth import BaseAuth  # noqa: E402
-from shared.errors import BootstrapConsumedError  # noqa: E402
-from database.auth import DatabaseAuth  # noqa: E402
-from app.database_client import DatabaseClient, DatabaseUnavailableError  # noqa: E402
+from app.database_client import DatabaseClient  # noqa: E402
+from tests.fake_database import FakeDatabase  # noqa: E402
 
-# The frontend's package is also called "app", so load its auth module by path.
-_spec = importlib.util.spec_from_file_location(
-    "frontend_auth", os.path.join(ROOT, "src", "frontend", "app", "auth.py"))
-_frontend_auth = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_frontend_auth)
-FrontendAuth = _frontend_auth.FrontendAuth
+
+def _load_auth(name, container):
+    # Every container's package is called "app", so load its auth module by path.
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(ROOT, "src", container, "app", "auth.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+FrontendAuth = _load_auth("frontend_auth", "frontend").FrontendAuth
+DatabaseAuth = _load_auth("database_auth", "database").DatabaseAuth
 
 PW = "a-long-enough-password"
 SECRETS = {
     "BACKEND_FRONTEND_SECRET": "f" * 40,
     "BACKEND_DATABASE_SECRET": "d" * 40,
 }
-
-
-class FakeDatabase:
-    """In-memory stand-in with the same interface as DatabaseClient.
-
-    The real store lives in the database container; the backend only ever
-    talks to it through DatabaseClient, so this fake is all it needs here.
-    """
-
-    def __init__(self):
-        self.users = {}          # username -> (role, refresh_token)
-        self.consumed = False
-        self.down = False
-
-    def validate_config(self):
-        pass
-
-    def _check(self):
-        if self.down:
-            raise DatabaseUnavailableError("down")
-
-    def create_bootstrap_admin(self, username, pw_hash):
-        self._check()
-        if self.consumed:
-            raise BootstrapConsumedError()
-        if username in self.users:
-            raise ValueError("taken")
-        self.consumed = True
-        self.users[username] = ("admin", f"rt-{username}")
-        return f"rt-{username}"
-
-    def create_user(self, username, pw_hash, role, *, replacing=None):
-        self._check()
-        if username in self.users:
-            raise ValueError("taken")
-        self.users.pop(replacing, None)
-        self.users[username] = (role, f"rt-{username}")
-        return f"rt-{username}"
-
-    def bootstrap_consumed(self):
-        self._check()
-        return self.consumed
-
-    def get_by_refresh_token(self, refresh_token):
-        self._check()
-        for name, (role, rt) in self.users.items():
-            if rt == refresh_token:
-                return name, role
-        return None
-
-    def exists(self, username):
-        self._check()
-        return username in self.users
 
 
 class BackendAuthFlowTest(unittest.TestCase):
@@ -106,39 +58,47 @@ class BackendAuthFlowTest(unittest.TestCase):
         self.assertEqual(self._bootstrap().status_code, 201)
         self.assertEqual(self._bootstrap().status_code, 410)
 
-    def test_full_flow_admin_is_replaced(self):
+    def test_admin_survives_creating_users(self):
         admin = self._bootstrap().get_json()
         r = self.client.post(
-            "/api/create-user/user",
+            "/api/users",
             json={"username": "svc", "password": PW},
             headers=self._bearer(admin["access_token"]),
         )
         self.assertEqual(r.status_code, 201)
-        svc = r.get_json()
 
-        # old admin: refresh token dead AND still-valid access token rejected
+        # the admin is NOT replaced any more: token and refresh token still work
         self.assertEqual(
-            self.client.post("/api/token", json={"refresh_token": admin["refresh_token"]}).status_code, 401
+            self.client.post("/api/token", json={"refresh_token": admin["refresh_token"]}).status_code, 200
         )
         self.assertEqual(
-            self.client.post("/api/create-user/user", json={"username": "x", "password": PW},
-                             headers=self._bearer(admin["access_token"])).status_code, 401
+            self.client.get("/api/users", headers=self._bearer(admin["access_token"])).status_code, 200
         )
 
-        # service user can wake devices (invalid MAC -> 400 from the service layer)
-        tok = self.client.post("/api/token", json={"refresh_token": svc["refresh_token"]}).get_json()
-        r = self.client.put("/api/devices/wol", json={"mac": "zz"}, headers=self._bearer(tok["access_token"]))
-        self.assertEqual(r.status_code, 400)
-        # ...but cannot create users
-        r = self.client.post("/api/create-user/user", json={"username": "y", "password": PW},
+        # a regular user logs in and reaches the device routes, but cannot manage users
+        tok = self.client.post("/api/login", json={"username": "svc", "password": PW}).get_json()
+        r = self.client.get("/api/devices", headers=self._bearer(tok["access_token"]))
+        self.assertEqual(r.status_code, 200)
+        r = self.client.post("/api/users", json={"username": "other", "password": PW},
                              headers=self._bearer(tok["access_token"]))
         self.assertEqual(r.status_code, 403)
 
-    def test_wol_requires_auth(self):
-        self.assertEqual(self.client.put("/api/devices/wol", json={"mac": "00:11:22:33:44:55"}).status_code, 401)
+    def test_old_create_user_route_is_gone(self):
+        admin = self._bootstrap().get_json()
+        r = self.client.post("/api/create-user/user", json={"username": "svc", "password": PW},
+                             headers=self._bearer(admin["access_token"]))
+        self.assertIn(r.status_code, (404, 405))
+
+    def test_wake_requires_auth(self):
+        self.assertEqual(self.client.post("/api/devices/1/wake").status_code, 401)
         self.assertEqual(
-            self.client.put("/api/devices/wol", json={"mac": "00:11:22:33:44:55"},
-                            headers={"Authorization": "Bearer x"}).status_code, 401)
+            self.client.post("/api/devices/1/wake", headers={"Authorization": "Bearer x"}).status_code, 401)
+
+    def test_old_free_form_wol_route_is_gone(self):
+        admin = self._bootstrap().get_json()
+        r = self.client.put("/api/devices/wol", json={"mac": "00:11:22:33:44:55", "ip": "10.0.0.255", "port": 7},
+                            headers=self._bearer(admin["access_token"]))
+        self.assertIn(r.status_code, (404, 405))
 
     def test_database_down_fails_closed(self):
         admin = self._bootstrap().get_json()
@@ -147,7 +107,7 @@ class BackendAuthFlowTest(unittest.TestCase):
         self.assertEqual(self._bootstrap().status_code, 503)
         self.assertEqual(
             self.client.post("/api/token", json={"refresh_token": admin["refresh_token"]}).status_code, 503)
-        r = self.client.put("/api/devices/wol", json={"mac": "zz"}, headers=self._bearer(admin["access_token"]))
+        r = self.client.post("/api/devices/1/wake", headers=self._bearer(admin["access_token"]))
         self.assertEqual(r.status_code, 503)
 
     def test_missing_env_fails_startup(self):
@@ -168,6 +128,19 @@ class DatabaseClientStubTest(unittest.TestCase):
             client.bootstrap_consumed,
             lambda: client.get_by_refresh_token("x"),
             lambda: client.exists("a"),
+            lambda: client.get_credentials("a"),
+            client.list_users,
+            lambda: client.set_password("a", "h"),
+            lambda: client.create_reset_token("a", "h", 1),
+            lambda: client.reset_password_with_token("h", "p"),
+            lambda: client.rename_user("a", "b"),
+            lambda: client.delete_user("a"),
+            lambda: client.create_refresh_token("a"),
+            lambda: client.revoke_refresh_token("x"),
+            lambda: client.list_devices("a"),
+            lambda: client.get_device("a", 1),
+            lambda: client.create_device("a", "nas", "192.168.1.10", "00:11:22:33:44:55"),
+            lambda: client.delete_device("a", 1),
         )
         for call in calls:
             with self.assertRaises(NotImplementedError):

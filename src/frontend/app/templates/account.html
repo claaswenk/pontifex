@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Account{% endblock %}
+
+{% block content %}
+<h1>Account</h1>
+<p class="lead">Who you are signed in as.</p>
+
+<div class="grid">
+  <section class="panel" aria-labelledby="profile-title">
+    <h2 id="profile-title">Profile</h2>
+    <span class="avatar avatar--large avatar--{{ account.role }}" aria-hidden="true">{{ account.username[:1] | upper }}</span>
+    <dl class="facts">
+      <dt>Username</dt>
+      <dd>{{ account.username }}</dd>
+      <dt>Role</dt>
+      <dd><span class="badge">{{ account.role }}</span></dd>
+      <dt>Devices</dt>
+      <dd>{% if account.device_count is not none %}{{ account.device_count }}{% else %}-{% endif %}</dd>
+    </dl>
+  </section>
+
+  <section class="panel" aria-labelledby="password-title">
+    <h2 id="password-title">Change password</h2>
+    <form method="post" action="{{ url_for('change_password') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="current_password">Current password</label>
+      <input id="current_password" name="current_password" type="password" autocomplete="current-password" maxlength="1024" required>
+      <label for="new_password">New password</label>
+      <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+      <label for="new_password_confirm">Repeat new password</label>
+      <input id="new_password_confirm" name="new_password_confirm" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+      <button type="submit" class="button">Change password</button>
+    </form>
+    <p class="hint">At least 12 characters. All your other sessions are signed out.</p>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Setup{% endblock %}
+
+{% block content %}
+<div class="auth">
+  <div class="auth-card auth-card--scene auth-card--wide">
+    <div class="scene" aria-hidden="true">
+      <span class="scene-moon"></span>
+      <img class="scene-owl" src="{{ url_for('static', filename='img/logo-320.png') }}" width="128" height="128" alt="">
+    </div>
+    <div class="auth-body">
+      <h1>First-time setup</h1>
+      <p class="lead">Create the administrator once. The setup key is <code>INITIAL_API_KEY</code> from your <code>.env</code> file.</p>
+      <form method="post" action="{{ url_for('setup') }}" class="form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="setup_key">Setup key</label>
+        <input id="setup_key" name="setup_key" type="password" autocomplete="off" maxlength="512" required autofocus>
+        <label for="username">Administrator name</label>
+        <input id="username" name="username" type="text" autocomplete="username" maxlength="64" required>
+        <div class="form-pair">
+          <div>
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+          </div>
+          <div>
+            <label for="password_confirm">Repeat password</label>
+            <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+          </div>
+        </div>
+        <p class="hint">Name: 3-64 characters, lower case letters, digits, '.', '_' or '-'. Password: at least 12 characters.</p>
+        <button type="submit" class="button">Create administrator</button>
+      </form>
+      <p class="auth-links"><a href="{{ url_for('login') }}">Back to sign in</a></p>
+    </div>
+  </div>
+</div>
+{% endblock %}
