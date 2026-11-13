@@ -7,16 +7,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "src"), os.path.join(ROOT, "src", "backend")]
 
 from shared.auth import BaseAuth  # noqa: E402
-from database.auth import DatabaseAuth  # noqa: E402
 from app.database_client import DatabaseClient  # noqa: E402
 from tests.fake_database import FakeDatabase  # noqa: E402
 
-# The frontend's package is also called "app", so load its auth module by path.
-_spec = importlib.util.spec_from_file_location(
-    "frontend_auth", os.path.join(ROOT, "src", "frontend", "app", "auth.py"))
-_frontend_auth = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_frontend_auth)
-FrontendAuth = _frontend_auth.FrontendAuth
+
+def _load_auth(name, container):
+    # Every container's package is called "app", so load its auth module by path.
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(ROOT, "src", container, "app", "auth.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+FrontendAuth = _load_auth("frontend_auth", "frontend").FrontendAuth
+DatabaseAuth = _load_auth("database_auth", "database").DatabaseAuth
 
 PW = "a-long-enough-password"
 SECRETS = {
