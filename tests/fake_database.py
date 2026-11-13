@@ -7,6 +7,7 @@ it through DatabaseClient, so this fake is all the backend tests need.
 import itertools
 import os
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "src"), os.path.join(ROOT, "src", "backend")]
@@ -20,6 +21,7 @@ class FakeDatabase:
         self.accounts = {}   # username -> {"role": str, "pw_hash": str}
         self.tokens = {}     # refresh token -> username
         self.owned = {}      # username -> [{"id", "name", "address", "mac"}]
+        self.resets = {}     # reset token hash -> (username, expires_at)
         self.consumed = False
         self.down = False
         self._counter = itertools.count(1)
@@ -36,10 +38,14 @@ class FakeDatabase:
         self.tokens[token] = username
         return token
 
+    def _drop_resets(self, username):
+        self.resets = {h: v for h, v in self.resets.items() if v[0] != username}
+
     def _forget(self, username):
         self.accounts.pop(username, None)
         self.owned.pop(username, None)
         self.tokens = {t: u for t, u in self.tokens.items() if u != username}
+        self._drop_resets(username)
 
     # -- accounts ----------------------------------------------------------
 
@@ -84,6 +90,26 @@ class FakeDatabase:
             return False
         self.accounts[username]["pw_hash"] = pw_hash
         self.tokens = {t: u for t, u in self.tokens.items() if u != username}
+        self._drop_resets(username)
+        return True
+
+    def create_reset_token(self, username, token_hash, expires_at):
+        self._check()
+        if username not in self.accounts:
+            return False
+        self._drop_resets(username)
+        self.resets[token_hash] = (username, expires_at)
+        return True
+
+    def reset_password_with_token(self, token_hash, pw_hash):
+        self._check()
+        entry = self.resets.pop(token_hash, None)
+        if entry is None:
+            return False
+        username, expires_at = entry
+        if expires_at <= time.time() or username not in self.accounts:
+            return False
+        self.set_password(username, pw_hash)
         return True
 
     def rename_user(self, username, new_username):
@@ -96,6 +122,7 @@ class FakeDatabase:
         if username in self.owned:
             self.owned[new_username] = self.owned.pop(username)
         self.tokens = {t: u for t, u in self.tokens.items() if u != username}
+        self._drop_resets(username)
         return True
 
     def delete_user(self, username):

@@ -1,6 +1,8 @@
 import os
 import sys
+import time
 import unittest
+import unittest.mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "src"), os.path.join(ROOT, "src", "backend")]
@@ -170,6 +172,121 @@ class UserManagementTest(unittest.TestCase):
         self.assertEqual(self.client.put("/api/me/password", json=body, headers=headers).status_code, 429)
         right = {"current_password": PW, "new_password": PW2}
         self.assertEqual(self.client.put("/api/me/password", json=right, headers=headers).status_code, 429)
+
+    # -- forgot password (admin issues a token, user redeems it) --------------------
+
+    def _issue(self, name="anna"):
+        return self.client.post(f"/api/users/{name}/reset-token", headers=self.admin)
+
+    def _redeem(self, token, password=PW2):
+        return self.client.post("/api/reset-password", json={"reset_token": token, "new_password": password})
+
+    def test_forgot_password_round_trip(self):
+        self._add()
+        old = self.client.post("/api/login", json={"username": "anna", "password": PW}).get_json()
+        r = self._issue()
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.headers["Cache-Control"], "no-store")
+        body = r.get_json()
+        self.assertEqual((body["username"], body["expires_in"]), ("anna", 900))
+
+        self.assertEqual(self._redeem(body["reset_token"]).status_code, 200)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW2}).status_code, 200)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW}).status_code, 401)
+        # every old session ended
+        self.assertEqual(self.client.post("/api/token", json={"refresh_token": old["refresh_token"]}).status_code, 401)
+
+    def test_reset_token_works_only_once(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        self.assertEqual(self._redeem(token).status_code, 200)
+        self.assertEqual(self._redeem(token, "yet-another-password").status_code, 401)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW2}).status_code, 200)
+
+    def test_new_token_replaces_the_old_one(self):
+        self._add()
+        first = self._issue().get_json()["reset_token"]
+        second = self._issue().get_json()["reset_token"]
+        self.assertNotEqual(first, second)
+        self.assertEqual(self._redeem(first).status_code, 401)
+        self.assertEqual(self._redeem(second).status_code, 200)
+
+    def test_expired_token_is_refused(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        with unittest.mock.patch("tests.fake_database.time.time", return_value=time.time() + 901):
+            self.assertEqual(self._redeem(token).status_code, 401)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW}).status_code, 200)
+
+    def test_token_is_stored_only_as_a_hash(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        self.assertNotIn(token, self.db.resets)
+        self.assertTrue(all(len(h) == 64 for h in self.db.resets))
+
+    def test_unknown_or_malformed_tokens_are_401(self):
+        self._add()
+        self._issue()
+        for token in ("nope", "x" * 129, "", None, 5, ["a"]):
+            with self.subTest(token=str(token)[:10]):
+                self.assertEqual(self._redeem(token).status_code, 401)
+
+    def test_invalid_new_password_is_400_and_keeps_the_token(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        for password in ("short", "x" * 1025, 123456789012, None):
+            with self.subTest(password=str(password)[:10]):
+                self.assertEqual(self._redeem(token, password).status_code, 400)
+        self.assertEqual(self._redeem(token).status_code, 200)
+
+    def test_only_the_admin_issues_tokens(self):
+        self._add()
+        self._add("bernd")
+        user = self._user_headers()
+        self.assertEqual(self.client.post("/api/users/bernd/reset-token", headers=user).status_code, 403)
+        self.assertEqual(self.client.post("/api/users/bernd/reset-token").status_code, 401)
+        self.assertEqual(self.db.resets, {})
+
+    def test_issue_rules(self):
+        self.assertEqual(self._issue("nobody").status_code, 404)
+        self.assertEqual(self._issue("Anna").status_code, 404)
+        # the admin uses PUT /api/me/password for themselves
+        self.assertEqual(self._issue("root").status_code, 409)
+        self.assertEqual(self.db.resets, {})
+
+    def test_redeem_is_public_and_needs_no_token(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        self.assertEqual(self._redeem(token).status_code, 200)
+
+    def test_guessing_tokens_is_throttled_and_does_not_lock_out_the_real_one(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        for _ in range(5):
+            self.assertEqual(self._redeem("guess-guess-guess").status_code, 401)
+        r = self._redeem("guess-guess-guess")
+        self.assertEqual(r.status_code, 429)
+        self.assertIn("Retry-After", r.headers)
+        # even the right token waits: the limit applies to the caller, not the token
+        self.assertEqual(self._redeem(token).status_code, 429)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW}).status_code, 200)
+
+    def test_password_change_rename_and_delete_drop_pending_tokens(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        self.client.put("/api/users/anna", json={"password": PW2}, headers=self.admin)
+        self.assertEqual(self._redeem(token, "third-long-password").status_code, 401)
+
+        token = self._issue().get_json()["reset_token"]
+        self.client.delete("/api/users/anna", headers=self.admin)
+        self.assertEqual(self._redeem(token).status_code, 401)
+
+    def test_reset_when_database_is_down_is_503(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        self.db.down = True
+        self.assertEqual(self._redeem(token).status_code, 503)
+        self.assertEqual(self._issue().status_code, 503)
 
     # -- change own username ---------------------------------------------------------
 

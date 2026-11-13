@@ -49,6 +49,23 @@ class DatabaseClient:
         """Replace the password hash and revoke every refresh token of the user. False if unknown."""
         raise NotImplementedError
 
+    def create_reset_token(self, username: str, token_hash: str, expires_at: int) -> bool:
+        """
+        Store the hash of a one-time password reset token (valid until the unix
+        time ``expires_at``), replacing any earlier unused one of the user.
+        False if the user is unknown.
+        """
+        raise NotImplementedError
+
+    def reset_password_with_token(self, token_hash: str, pw_hash: str) -> bool:
+        """
+        Atomically: if the token is known and not expired, replace the owner's
+        password hash, revoke all their refresh tokens and forget the token
+        (single use). False for an unknown, used or expired token.
+        set_password, rename_user and delete_user also forget the user's reset token.
+        """
+        raise NotImplementedError
+
     def rename_user(self, username: str, new_username: str) -> bool:
         """
         Change the name of an account. Its identity, role, password, devices stay

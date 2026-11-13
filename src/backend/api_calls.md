@@ -120,6 +120,30 @@ curl -k -X PUT https://localhost:7337/api/users/<username> \
     "password": "<>"
   }'
 ```
+10a. Forgot password, step 1 (admin): issue a one-time reset token for a user and hand it to them over a trusted channel
+```
+curl -k -X POST https://localhost:7337/api/users/<username>/reset-token \
+  -H "Authorization: Bearer <admin token>"
+```
+
+Response `201`: `{"username": "<>", "reset_token": "<>", "expires_in": 900}`. The token is shown only once, is valid for 15 minutes
+and works once. A new token replaces an earlier one. The admin uses step 7 for their own password (`409`).
+
+10b. Forgot password, step 2 (the user, no login needed): set a new password with the token
+```
+curl -k -X POST https://localhost:7337/api/reset-password \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reset_token": "<>",
+    "new_password": "<>"
+  }'
+```
+
+Response `200`: `{"status": "ok"}`. All sessions of the user end; they log in again with the new password.
+`401` for an unknown, used or expired token, `400` for an invalid password (the token stays valid).
+Wrong tokens count per address: after 30 failures `429`. Changing the password, renaming or deleting the user also voids a pending token.
+
+
 
 11. Delete a user (with their devices and sessions; not yourself, not the admin account: `409`)
 ```
