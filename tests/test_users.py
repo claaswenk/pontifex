@@ -1,6 +1,8 @@
 import os
 import sys
+import time
 import unittest
+import unittest.mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "src"), os.path.join(ROOT, "src", "backend")]
@@ -170,6 +172,229 @@ class UserManagementTest(unittest.TestCase):
         self.assertEqual(self.client.put("/api/me/password", json=body, headers=headers).status_code, 429)
         right = {"current_password": PW, "new_password": PW2}
         self.assertEqual(self.client.put("/api/me/password", json=right, headers=headers).status_code, 429)
+
+    # -- forgot password (admin issues a token, user redeems it) --------------------
+
+    def _issue(self, name="anna"):
+        return self.client.post(f"/api/users/{name}/reset-token", headers=self.admin)
+
+    def _redeem(self, token, password=PW2):
+        return self.client.post("/api/reset-password", json={"reset_token": token, "new_password": password})
+
+    def test_forgot_password_round_trip(self):
+        self._add()
+        old = self.client.post("/api/login", json={"username": "anna", "password": PW}).get_json()
+        r = self._issue()
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.headers["Cache-Control"], "no-store")
+        body = r.get_json()
+        self.assertEqual((body["username"], body["expires_in"]), ("anna", 900))
+
+        self.assertEqual(self._redeem(body["reset_token"]).status_code, 200)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW2}).status_code, 200)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW}).status_code, 401)
+        # every old session ended
+        self.assertEqual(self.client.post("/api/token", json={"refresh_token": old["refresh_token"]}).status_code, 401)
+
+    def test_reset_token_works_only_once(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        self.assertEqual(self._redeem(token).status_code, 200)
+        self.assertEqual(self._redeem(token, "yet-another-password").status_code, 401)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW2}).status_code, 200)
+
+    def test_new_token_replaces_the_old_one(self):
+        self._add()
+        first = self._issue().get_json()["reset_token"]
+        second = self._issue().get_json()["reset_token"]
+        self.assertNotEqual(first, second)
+        self.assertEqual(self._redeem(first).status_code, 401)
+        self.assertEqual(self._redeem(second).status_code, 200)
+
+    def test_expired_token_is_refused(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        with unittest.mock.patch("tests.fake_database.time.time", return_value=time.time() + 901):
+            self.assertEqual(self._redeem(token).status_code, 401)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW}).status_code, 200)
+
+    def test_token_is_stored_only_as_a_hash(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        self.assertNotIn(token, self.db.resets)
+        self.assertTrue(all(len(h) == 64 for h in self.db.resets))
+
+    def test_unknown_or_malformed_tokens_are_401(self):
+        self._add()
+        self._issue()
+        for token in ("nope", "x" * 129, "", None, 5, ["a"]):
+            with self.subTest(token=str(token)[:10]):
+                self.assertEqual(self._redeem(token).status_code, 401)
+
+    def test_invalid_new_password_is_400_and_keeps_the_token(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        for password in ("short", "x" * 1025, 123456789012, None):
+            with self.subTest(password=str(password)[:10]):
+                self.assertEqual(self._redeem(token, password).status_code, 400)
+        self.assertEqual(self._redeem(token).status_code, 200)
+
+    def test_only_the_admin_issues_tokens(self):
+        self._add()
+        self._add("bernd")
+        user = self._user_headers()
+        self.assertEqual(self.client.post("/api/users/bernd/reset-token", headers=user).status_code, 403)
+        self.assertEqual(self.client.post("/api/users/bernd/reset-token").status_code, 401)
+        self.assertEqual(self.db.resets, {})
+
+    def test_issue_rules(self):
+        self.assertEqual(self._issue("nobody").status_code, 404)
+        self.assertEqual(self._issue("Anna").status_code, 404)
+        # the admin uses PUT /api/me/password for themselves
+        self.assertEqual(self._issue("root").status_code, 409)
+        self.assertEqual(self.db.resets, {})
+
+    def test_redeem_is_public_and_needs_no_token(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        self.assertEqual(self._redeem(token).status_code, 200)
+
+    def test_guessing_tokens_is_throttled_and_does_not_lock_out_the_real_one(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        for _ in range(5):
+            self.assertEqual(self._redeem("guess-guess-guess").status_code, 401)
+        r = self._redeem("guess-guess-guess")
+        self.assertEqual(r.status_code, 429)
+        self.assertIn("Retry-After", r.headers)
+        # even the right token waits: the limit applies to the caller, not the token
+        self.assertEqual(self._redeem(token).status_code, 429)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW}).status_code, 200)
+
+    def test_password_change_rename_and_delete_drop_pending_tokens(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        self.client.put("/api/users/anna", json={"password": PW2}, headers=self.admin)
+        self.assertEqual(self._redeem(token, "third-long-password").status_code, 401)
+
+        token = self._issue().get_json()["reset_token"]
+        self.client.delete("/api/users/anna", headers=self.admin)
+        self.assertEqual(self._redeem(token).status_code, 401)
+
+    def test_reset_when_database_is_down_is_503(self):
+        self._add()
+        token = self._issue().get_json()["reset_token"]
+        self.db.down = True
+        self.assertEqual(self._redeem(token).status_code, 503)
+        self.assertEqual(self._issue().status_code, 503)
+
+    # -- change own username ---------------------------------------------------------
+
+    def _rename(self, headers, new="annika", password=PW):
+        return self.client.patch(
+            "/api/me", json={"username": new, "current_password": password}, headers=headers)
+
+    def test_user_renames_self_and_keeps_role_devices_and_password(self):
+        self._add()
+        old = self.client.post("/api/login", json={"username": "anna", "password": PW}).get_json()
+        headers = {"Authorization": f"Bearer {old['access_token']}"}
+        self.db.create_device("anna", "nas", "192.168.1.10", "00:11:22:33:44:55")
+
+        r = self._rename(headers, "  Annika.K ")
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertEqual((body["username"], body["role"]), ("annika.k", "user"))
+
+        fresh = {"Authorization": f"Bearer {body['access_token']}"}
+        me = self.client.get("/api/me", headers=fresh).get_json()
+        self.assertEqual((me["username"], me["role"]), ("annika.k", "user"))
+        self.assertEqual([d["name"] for d in self.db.list_devices("annika.k")], ["nas"])
+        self.assertEqual(self.db.list_devices("anna"), [])
+        self.assertEqual(self.client.post("/api/login", json={"username": "annika.k", "password": PW}).status_code, 200)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW}).status_code, 401)
+
+    def test_rename_ends_old_sessions(self):
+        self._add()
+        old = self.client.post("/api/login", json={"username": "anna", "password": PW}).get_json()
+        headers = {"Authorization": f"Bearer {old['access_token']}"}
+        fresh = self._rename(headers).get_json()
+        self.assertEqual(self.client.get("/api/me", headers=headers).status_code, 401)
+        self.assertEqual(self.client.post("/api/token", json={"refresh_token": old["refresh_token"]}).status_code, 401)
+        self.assertEqual(self.client.post("/api/token", json={"refresh_token": fresh["refresh_token"]}).status_code, 200)
+
+    def test_role_cannot_be_changed(self):
+        self._add()
+        headers = self._user_headers()
+        for body in (
+            {"role": "admin"},
+            {"username": "annika", "current_password": PW, "role": "admin"},
+            {"username": "annika", "current_password": PW, "role": "user"},
+        ):
+            with self.subTest(body=str(body)):
+                self.assertEqual(self.client.patch("/api/me", json=body, headers=headers).status_code, 403)
+        me = self.client.get("/api/me", headers=headers).get_json()
+        self.assertEqual((me["username"], me["role"]), ("anna", "user"))
+
+    def test_admin_can_rename_but_stays_admin(self):
+        r = self._rename(self.admin, "boss")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["role"], "admin")
+        self.assertEqual(self.db.get_credentials("boss")["role"], "admin")
+        self.assertFalse(self.db.exists("root"))
+
+    def test_rename_needs_the_current_password(self):
+        self._add()
+        headers = self._user_headers()
+        for body in (
+            {"username": "annika", "current_password": "wrong-wrong-wrong"},
+            {"username": "annika"},
+            {"username": "annika", "current_password": 5},
+            {"username": "annika", "current_password": ""},
+        ):
+            with self.subTest(body=str(body)):
+                self.assertEqual(self.client.patch("/api/me", json=body, headers=headers).status_code, 403)
+        self.assertTrue(self.db.exists("anna"))
+
+    def test_rename_rejects_taken_same_and_invalid_names(self):
+        self._add()
+        self._add("bernd")
+        headers = self._user_headers()
+        for name in ("bernd", "root", "BERND", "anna", " Anna "):
+            with self.subTest(name=name):
+                self.assertEqual(self._rename(headers, name).status_code, 409)
+        for name in ("", "ab", "a b", "../x", "x" * 65, 5, None, ["a"]):
+            with self.subTest(name=name):
+                self.assertEqual(self._rename(headers, name).status_code, 400)
+        self.assertTrue(self.db.exists("anna"))
+        self.assertTrue(self.db.exists("bernd"))
+
+    def test_rename_rejects_other_fields_and_bad_bodies(self):
+        self._add()
+        headers = self._user_headers()
+        self.assertEqual(self.client.patch("/api/me", json={"current_password": PW}, headers=headers).status_code, 400)
+        self.assertEqual(
+            self.client.patch("/api/me", json={"username": "annika", "current_password": PW, "email": "a@b.c"},
+                              headers=headers).status_code, 400)
+        self.assertEqual(self.client.patch("/api/me", json=["annika"], headers=headers).status_code, 400)
+        self.assertEqual(self.client.patch("/api/me", data="not json", headers=headers).status_code, 400)
+
+    def test_rename_needs_a_token(self):
+        self.assertEqual(self.client.patch("/api/me", json={"username": "annika", "current_password": PW}).status_code, 401)
+
+    def test_guessing_the_password_to_rename_is_throttled(self):
+        self._add()
+        headers = self._user_headers()
+        for _ in range(5):
+            self.assertEqual(self._rename(headers, password="wrong-wrong-wrong").status_code, 403)
+        self.assertEqual(self._rename(headers, password="wrong-wrong-wrong").status_code, 429)
+        self.assertEqual(self._rename(headers).status_code, 429)
+        self.assertTrue(self.db.exists("anna"))
+
+    def test_rename_when_database_is_down_is_503(self):
+        self._add()
+        headers = self._user_headers()
+        self.db.down = True
+        self.assertEqual(self._rename(headers).status_code, 503)
 
     # -- delete own account ----------------------------------------------------------
 

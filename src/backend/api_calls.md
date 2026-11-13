@@ -121,11 +121,54 @@ curl -k -X PUT https://localhost:7337/api/users/<username> \
   }'
 ```
 
+10a. Forgot password, step 1 (admin): issue a one-time reset token for a user and hand it to them over a trusted channel
+```
+curl -k -X POST https://localhost:7337/api/users/<username>/reset-token \
+  -H "Authorization: Bearer <admin token>"
+```
+
+Response `201`: `{"username": "<>", "reset_token": "<>", "expires_in": 900}`. The token is shown only once, is valid for 15 minutes
+and works once. A new token replaces an earlier one. The admin uses step 7 for their own password (`409`).
+
+10b. Forgot password, step 2 (the user, no login needed): set a new password with the token
+```
+curl -k -X POST https://localhost:7337/api/reset-password \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reset_token": "<>",
+    "new_password": "<>"
+  }'
+```
+
+Response `200`: `{"status": "ok"}`. All sessions of the user end; they log in again with the new password.
+`401` for an unknown, used or expired token, `400` for an invalid password (the token stays valid).
+Wrong tokens count per address: after 5 failures `429` (15 minutes). Changing the password, renaming or deleting the user also voids a pending token.
+
+
+
 11. Delete a user (with their devices and sessions; not yourself, not the admin account: `409`)
 ```
 curl -k -X DELETE https://localhost:7337/api/users/<username> \
   -H "Authorization: Bearer <admin token>"
 ```
+
+11b. Change my username (needs the current password; ends all my sessions and returns a fresh token pair; the role can never be changed: `403`)
+```
+curl -k -X PATCH https://localhost:7337/api/me \
+  -H "Authorization: Bearer <>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "<>",
+    "current_password": "<>"
+  }'
+```
+
+Response: `{"username": "<new name>", "role": "user", "refresh_token": "...", "access_token": "...", "expires_in": 300}`
+
+- `409` if the name is taken or is already yours, `400` for an invalid name or any field other than `username` and `current_password`.
+- `403` if the password is wrong (counts against the login limit, `429` when exceeded) or if `role` is sent.
+- Devices, password and role stay with the account.
+
 
 11a. Delete my own account (with my devices and sessions; needs the current password; the admin account cannot be deleted: `409`)
 ```

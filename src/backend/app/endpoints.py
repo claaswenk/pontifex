@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 MAX_USERNAME_LENGTH = 64
 MAX_PASSWORD_LENGTH = 1024
 MIN_PASSWORD_LENGTH = 12
+MAX_RESET_TOKEN_LENGTH = 128
 
 # Lower case only, so "Anna" and "anna" cannot be two accounts; the character
 # set also keeps the name safe to use as a URL path segment.
@@ -261,6 +262,56 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
             return jsonify({"error": "User not found."}), 404
         return jsonify({"username": username}), 200
 
+    # -----------------------------------------------------------------------
+    # Forgot password. Accounts have no e-mail address, so the admin is the
+    # trusted channel: they issue a one-time token and hand it to the user,
+    # who sets the new password with it (POST /api/reset-password, public).
+    # The token is valid once for 15 minutes and only its hash is stored.
+    # -----------------------------------------------------------------------
+
+    @api_bp.route("/users/<username>/reset-token", methods=["POST"])
+    @auth.require_role("admin")
+    def issue_reset_token(username):
+        if _normalized_username(username) != username:
+            return jsonify({"error": "User not found."}), 404
+        if username == g.current_user["sub"]:
+            return jsonify({"error": "Use PUT /api/me/password to change your own password."}), 409
+
+        token = auth.create_reset_token(username)
+        if token is None:
+            return jsonify({"error": "User not found."}), 404
+
+        response = jsonify({
+            "username":    username,
+            "reset_token": token,
+            "expires_in":  auth.RESET_TOKEN_TTL_SECONDS,
+        })
+        response.headers["Cache-Control"] = "no-store"
+        return response, 201
+
+    @api_bp.route("/reset-password", methods=["POST"])
+    def reset_password():
+        data = request.get_json(silent=True) or {}
+        token = data.get("reset_token")
+        new = data.get("new_password")
+
+        if not isinstance(token, str) or not token or len(token) > MAX_RESET_TOKEN_LENGTH:
+            return jsonify({"error": "Invalid or expired reset token."}), 401
+        if not _valid_new_password(new):
+            return jsonify({"error": PASSWORD_RULE}), 400
+
+        try:
+            done = auth.reset_password_with_token(token, new, request.remote_addr or "unknown")
+        except LoginThrottled as exc:
+            logger.warning("Password reset throttled")
+            response = jsonify({"error": "Too many failed attempts. Try again later."})
+            response.headers["Retry-After"] = str(exc.retry_after)
+            return response, 429
+
+        if not done:
+            return jsonify({"error": "Invalid or expired reset token."}), 401
+        return jsonify({"status": "ok"}), 200
+
     @api_bp.route("/users/<username>", methods=["DELETE"])
     @auth.require_role("admin")
     def delete_user(username):
@@ -311,6 +362,59 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
 
         refresh_token, access_token = tokens
         return jsonify({
+            "refresh_token": refresh_token,
+            "access_token":  access_token,
+            "expires_in":    300,
+        }), 200
+
+    # -----------------------------------------------------------------------
+    # PATCH /api/me  (any signed-in user, needs the current password)
+    # Changes the username. The role can never be changed: not here, not by the
+    # user. Ends all sessions, so a fresh token pair for the new name is returned.
+    # -----------------------------------------------------------------------
+
+    @api_bp.route("/me", methods=["PATCH"])
+    @auth.require_role("admin", "user")
+    def update_own_account():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "A JSON object is required."}), 400
+
+        if "role" in data:
+            return jsonify({"error": "The role cannot be changed."}), 403
+        unknown = set(data) - {"username", "current_password"}
+        if unknown:
+            return jsonify({"error": "Only 'username' can be changed."}), 400
+        if "username" not in data:
+            return jsonify({"error": "Field 'username' is required."}), 400
+
+        new_username = _normalized_username(data.get("username"))
+        if new_username is None:
+            return jsonify({"error": USERNAME_RULE}), 400
+
+        current = data.get("current_password")
+        if not isinstance(current, str) or not current or len(current) > MAX_PASSWORD_LENGTH:
+            return jsonify({"error": "Current password is wrong."}), 403
+
+        try:
+            tokens = auth.change_own_username(
+                g.current_user["sub"], current, new_username, request.remote_addr or "unknown"
+            )
+        except LoginThrottled as exc:
+            logger.warning("Username change throttled")
+            response = jsonify({"error": "Too many failed attempts. Try again later."})
+            response.headers["Retry-After"] = str(exc.retry_after)
+            return response, 429
+        except ValueError:
+            return jsonify({"error": "Unable to change the username to the provided value."}), 409
+
+        if tokens is None:
+            return jsonify({"error": "Current password is wrong."}), 403
+
+        refresh_token, access_token = tokens
+        return jsonify({
+            "username":      new_username,
+            "role":          g.current_user["role"],
             "refresh_token": refresh_token,
             "access_token":  access_token,
             "expires_in":    300,
