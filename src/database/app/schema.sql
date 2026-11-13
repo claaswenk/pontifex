@@ -4,16 +4,18 @@
 
 CREATE TABLE IF NOT EXISTS "users" (
     "user_id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    "username" TEXT NOT NULL,
+    "username" TEXT NOT NULL UNIQUE,
     "password" TEXT NOT NULL DEFAULT NULL,
-    "is_admin" INTEGER DEFAULT 0,
+    "is_admin" INTEGER NOT NULL DEFAULT 0,
     "created_at" TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS "mapping" (
-    "user_id" INT NOT NULL ,
+    "user_id" INT NOT NULL,
     "device_id" INTEGER NOT NULL,
-    FOREIGN KEY ("user_id") REFERENCES users("user_id")
+    PRIMARY KEY ("user_id", "device_id"),
+    FOREIGN KEY ("user_id") REFERENCES users("user_id") ON DELETE CASCADE,
+    FOREIGN KEY ("device_id") REFERENCES devices("device_id") ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "devices" (
