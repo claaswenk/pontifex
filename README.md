@@ -73,6 +73,19 @@ pre-commit run --all-files
 uvx pip-audit -r requirements.txt --no-deps --disable-pip
 ```
 
+## Input validation
+
+Every value that comes from outside goes through [`src/shared/input_validator.py`](src/shared/input_validator.py) first, in all three containers, and only the returned value is used afterwards: JSON bodies, form fields, URL segments, cookies and tokens.
+
+- **Allow-lists, not block-lists.** A value is accepted only if it has the expected type, length and characters (for example a username is `[a-z0-9][a-z0-9._-]{2,63}`). Anything else is refused with the rule of the field, so the answer does not depend on what the attacker sent.
+- **Bounded first.** Length is checked before any pattern runs, and the patterns have no nested quantifiers, so a long input cannot stall a request.
+- **Text only.** NUL bytes and strings that cannot be encoded as UTF-8 are refused everywhere. Names also refuse control, line-break and bidi characters.
+- **Prepared statements only.** The database container passes values as `?` parameters; `tests/test_input_validator.py` fails if a query is built from a string.
+- **Attack attempts are logged**, with the field name and the kind (`sql`, `path traversal`, `markup`, `template`, `shell`, `control characters`), never the value. Passwords are never inspected: they may contain any character.
+- **The frontend refuses over-long input instead of cutting it**, because a cut name can turn into a different valid one. The backend still validates everything again; the frontend is not trusted by it.
+
+Add a new input in three steps: add a rule to `InputValidator`, call it where the value is read, and add the hostile cases to `tests/test_input_validator.py`.
+
 ## Dependencies
 
 `requirements.in` holds the direct dependencies. `requirements.txt` is generated from it and contains pinned versions with hashes. Never edit it by hand.

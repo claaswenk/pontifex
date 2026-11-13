@@ -9,7 +9,6 @@ the CSRF token of that session.
 
 import datetime
 import logging
-import re
 import secrets
 from functools import wraps
 
@@ -21,12 +20,24 @@ from app.services import (
     BackendUnavailable,
     SessionExpired,
 )
+from shared.input_validator import InputValidator as V, InvalidInput
 
 log = logging.getLogger(__name__)
 
 COOKIE = "__Host-pontifex-session"
-USERNAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{2,63}")
 MAX_FLASHES = 5
+
+
+def _field(name: str, max_len: int, strip: bool = False) -> str:
+    """
+    A form field as text, or InvalidInput if it is too long or has a NUL.
+
+    Over-long input is refused, not cut: a cut name could turn into a
+    different, valid one. The rules of each field (and their messages) stay
+    with the backend, which validates everything again.
+    """
+    value = V.text(request.form.get(name, ""), name, max_len)
+    return value.strip() if strip else value
 
 ERROR_TEXT = {
     400: "The request could not be processed.",
@@ -83,9 +94,16 @@ def register_pages(app, sessions, backend) -> None:
         g.clear_cookie = False
         if request.endpoint in (None, "static", "health", "internal_ping"):
             return None
-        g.session = sessions.get(request.cookies.get(COOKIE, ""))
+        try:
+            session_id = V.token(request.cookies.get(COOKIE, ""), "session cookie")
+        except InvalidInput:
+            session_id = ""  # not something we issued: same as no cookie
+        g.session = sessions.get(session_id)
         if request.method == "POST":
-            sent = request.form.get("csrf_token", "")
+            try:
+                sent = V.token(request.form.get("csrf_token", ""), "csrf_token")
+            except InvalidInput:
+                sent = ""
             if g.session is None or not secrets.compare_digest(
                 sent.encode("utf-8"), g.session.csrf.encode("utf-8")
             ):
@@ -143,6 +161,11 @@ def register_pages(app, sessions, backend) -> None:
     def http_error(exc):
         return error_page(exc.code or 500)
 
+    @app.errorhandler(InvalidInput)
+    def refused_input(exc):
+        log.warning("Form refused: field %r", exc.field)
+        return error_page(400)
+
     @app.errorhandler(BackendUnavailable)
     def backend_unavailable(_exc):
         return error_page(503)
@@ -190,10 +213,10 @@ def register_pages(app, sessions, backend) -> None:
             ensure_session()
             return render_template("setup.html", active=None)
 
-        key = request.form.get("setup_key", "")[:512]
-        username = request.form.get("username", "").strip()[:64]
-        password = request.form.get("password", "")[:1024]
-        if password != request.form.get("password_confirm", ""):
+        key = _field("setup_key", 512)
+        username = _field("username", 64, strip=True)
+        password = _field("password", 1024)
+        if password != _field("password_confirm", 1024):
             flash("error", "The two passwords are not the same.")
             return redirect(url_for("setup"), 303)
 
@@ -226,8 +249,12 @@ def register_pages(app, sessions, backend) -> None:
             ensure_session()
             return render_template("login.html", active=None)
 
-        username = request.form.get("username", "").strip()[:64]
-        password = request.form.get("password", "")[:1024]
+        try:
+            username = _field("username", 64, strip=True)
+            password = _field("password", 1024)
+        except InvalidInput:  # cannot be a real account: answered like a wrong password
+            flash("error", "Invalid username or password.")
+            return redirect(url_for("login"), 303)
         status, data = backend.call("POST", "/api/login", {"username": username, "password": password})
         tokens = _tokens(data) if status == 200 else None
         role = data.get("role")
@@ -279,9 +306,9 @@ def register_pages(app, sessions, backend) -> None:
     @login_required()
     def add_device():
         body = {
-            "name": request.form.get("name", "")[:200],
-            "address": request.form.get("address", "")[:300],
-            "mac": request.form.get("mac", "")[:100],
+            "name": _field("name", 200),
+            "address": _field("address", 300),
+            "mac": _field("mac", 100),
         }
         status, data = backend.call_for(g.session, "POST", "/api/devices", body)
         report(status, data, 201, "Device added.")
@@ -306,9 +333,10 @@ def register_pages(app, sessions, backend) -> None:
     # ------------------------------------------------------------------
 
     def valid_username(name: str) -> str:
-        if not USERNAME_PATTERN.fullmatch(name):
+        try:
+            return V.path_username(name)
+        except InvalidInput:
             abort(404)
-        return name
 
     @app.route("/users")
     @login_required("admin")
@@ -323,8 +351,8 @@ def register_pages(app, sessions, backend) -> None:
     @login_required("admin")
     def add_user():
         body = {
-            "username": request.form.get("username", "").strip()[:64],
-            "password": request.form.get("password", "")[:1024],
+            "username": _field("username", 64, strip=True),
+            "password": _field("password", 1024),
         }
         status, data = backend.call_for(g.session, "POST", "/api/users", body)
         report(status, data, 201, "User added.")
@@ -334,7 +362,7 @@ def register_pages(app, sessions, backend) -> None:
     @login_required("admin")
     def reset_password(name):
         name = valid_username(name)
-        body = {"password": request.form.get("password", "")[:1024]}
+        body = {"password": _field("password", 1024)}
         status, data = backend.call_for(g.session, "PUT", f"/api/users/{name}", body)
         if status == 200:
             sessions.destroy_user(name)  # the backend ended their sessions; do the same here
@@ -374,12 +402,12 @@ def register_pages(app, sessions, backend) -> None:
     @app.route("/account/password", methods=["POST"])
     @login_required()
     def change_password():
-        new = request.form.get("new_password", "")[:1024]
-        if new != request.form.get("new_password_confirm", ""):
+        new = _field("new_password", 1024)
+        if new != _field("new_password_confirm", 1024):
             flash("error", "The two new passwords are not the same.")
             return redirect(url_for("account"), 303)
 
-        body = {"current_password": request.form.get("current_password", "")[:1024], "new_password": new}
+        body = {"current_password": _field("current_password", 1024), "new_password": new}
         status, data = backend.call_for(g.session, "PUT", "/api/me/password", body)
         tokens = _tokens(data) if status == 200 else None
         if tokens is not None:
