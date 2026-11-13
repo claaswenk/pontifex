@@ -9,9 +9,27 @@ import logging
 from flask import Blueprint, jsonify, request
 from app.auth import DatabaseAuth
 from app.services import get_db_service
+from shared.input_validator import InputValidator as V, InvalidInput
 
 api_db = Blueprint("api", __name__)
 logger = logging.getLogger(__name__)
+
+
+@api_db.errorhandler(InvalidInput)
+def refused_input(exc):
+    return jsonify({"error": exc.message}), 400
+
+
+def _body() -> dict:
+    return V.json_object(request.get_json(silent=True))
+
+
+def _password_hash(value) -> str:
+    """The stored credential (a hash made by the backend): bounded text, never empty."""
+    secret = V.text(value, "password", V.MAX_PASSWORD_LENGTH)
+    if not secret:
+        raise InvalidInput("password", "username and password are required")
+    return secret
 
 
 def _require_backend(f):
@@ -42,12 +60,9 @@ def health_check():
 @api_db.route("/create-user/admin", methods=["POST"])
 @_require_backend
 def create_admin():
-    data = request.get_json(silent=True) or {}
-    username = data.get("username")
-    password = data.get("password")
-
-    if not username or not password:
-        return jsonify({"error": "username and password are required"}), 400
+    data = _body()
+    username = V.username(data.get("username"))
+    password = _password_hash(data.get("password"))
 
     db = get_db_service()
     try:
@@ -71,12 +86,9 @@ def create_admin():
 @api_db.route("/create-user/user", methods=["POST"])
 @_require_backend
 def create_user():
-    data = request.get_json(silent=True) or {}
-    username = data.get("username")
-    password = data.get("password")
-
-    if not username or not password:
-        return jsonify({"error": "username and password are required"}), 400
+    data = _body()
+    username = V.username(data.get("username"))
+    password = _password_hash(data.get("password"))
 
     db = get_db_service()
     try:
@@ -100,12 +112,10 @@ def create_user():
 @api_db.route("/create-device", methods=["POST"])
 @_require_backend
 def create_device():
-    data = request.get_json(silent=True) or {}
-    device_name = data.get("device_name")
+    data = _body()
+    device_name = V.device_name(data.get("device_name"), "device_name")
     address = data.get("address")
-
-    if not device_name:
-        return jsonify({"error": "device_name is required"}), 400
+    address = V.address(address) if address else None
 
     db = get_db_service()
     try:
@@ -130,12 +140,9 @@ def create_device():
 @api_db.route("/create-connection", methods=["POST"])
 @_require_backend
 def create_connection():
-    data = request.get_json(silent=True) or {}
-    username = data.get("username")
-    device_name = data.get("device_name")
-
-    if not username or not device_name:
-        return jsonify({"error": "username and device_name are required"}), 400
+    data = _body()
+    username = V.username(data.get("username"))
+    device_name = V.device_name(data.get("device_name"), "device_name")
 
     db = get_db_service()
     if db.create_connection(username, device_name):
@@ -159,11 +166,7 @@ def create_connection():
 @api_db.route("/delete/user", methods=["POST"])
 @_require_backend
 def delete_user():
-    data = request.get_json(silent=True) or {}
-    username = data.get("username")
-
-    if not username:
-        return jsonify({"error": "username is required"}), 400
+    username = V.username(_body().get("username"))
 
     db = get_db_service()
     if db.delete_user(username):
@@ -186,9 +189,9 @@ def delete_user():
 @api_db.route("/delete/device", methods=["POST"])
 @_require_backend
 def delete_device():
-    data = request.get_json(silent=True) or {}
-    username = data.get("username")
-    device_name = data.get("device_name")
+    data = _body()
+    username = V.username(data["username"]) if data.get("username") else None
+    device_name = V.device_name(data["device_name"], "device_name") if data.get("device_name") else None
 
     db = get_db_service()
 
@@ -231,12 +234,9 @@ def delete_device():
 @api_db.route("/delete/connection", methods=["POST"])
 @_require_backend
 def delete_connection():
-    data = request.get_json(silent=True) or {}
-    username = data.get("username")
-    device_name = data.get("device_name")
-
-    if not username or not device_name:
-        return jsonify({"error": "username and device_name are required"}), 400
+    data = _body()
+    username = V.username(data.get("username"))
+    device_name = V.device_name(data.get("device_name"), "device_name")
 
     db = get_db_service()
     if db.delete_connection(username, device_name):
