@@ -317,6 +317,38 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         }), 200
 
     # -----------------------------------------------------------------------
+    # DELETE /api/me  (any signed-in regular user, needs the current password)
+    # Removes the account with its devices and sessions. The admin can create
+    # the user again with POST /api/users. The admin account itself stays.
+    # -----------------------------------------------------------------------
+
+    @api_bp.route("/me", methods=["DELETE"])
+    @auth.require_role("admin", "user")
+    def delete_own_account():
+        if g.current_user.get("role") == "admin":
+            return jsonify({"error": "The admin account cannot be deleted."}), 409
+
+        data = request.get_json(silent=True) or {}
+        current = data.get("current_password")
+
+        if not isinstance(current, str) or not current or len(current) > MAX_PASSWORD_LENGTH:
+            return jsonify({"error": "Current password is wrong."}), 403
+
+        try:
+            deleted = auth.delete_own_account(
+                g.current_user["sub"], current, request.remote_addr or "unknown"
+            )
+        except LoginThrottled as exc:
+            logger.warning("Account deletion throttled")
+            response = jsonify({"error": "Too many failed attempts. Try again later."})
+            response.headers["Retry-After"] = str(exc.retry_after)
+            return response, 429
+
+        if not deleted:
+            return jsonify({"error": "Current password is wrong."}), 403
+        return jsonify({"username": g.current_user["sub"]}), 200
+
+    # -----------------------------------------------------------------------
     # Devices. Everybody manages only their own; a device of somebody else is
     # reported exactly like one that does not exist (404).
     # -----------------------------------------------------------------------

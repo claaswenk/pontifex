@@ -127,6 +127,18 @@ curl -k -X DELETE https://localhost:7337/api/users/<username> \
   -H "Authorization: Bearer <admin token>"
 ```
 
+11a. Delete my own account (with my devices and sessions; needs the current password; the admin account cannot be deleted: `409`)
+```
+curl -k -X DELETE https://localhost:7337/api/me \
+  -H "Authorization: Bearer <>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "current_password": "<>"
+  }'
+```
+
+`403` if the password is wrong (counts against the login limit, `429` when exceeded). Afterwards the admin can create the user again with step 9.
+
 ---
 
 ## Devices (every user manages their own, the admin too)
