@@ -19,9 +19,13 @@
 #   PONTIFEX_TAG=v1.0.0   or   PONTIFEX_TAG=sha-<commit>
 #
 # Services:
-#   backend   Flask REST API (/api/*). The database container is not part of
-#             this stack yet; endpoints that need it answer with an error.
-#   frontend  Flask UI. Talks to the backend only.
+#   backend     Flask REST API (/api/*). The database container is not part of
+#               this stack yet; endpoints that need it answer with an error.
+#   frontend    Flask UI. Talks to the backend only.
+#   wake-relay  Sends the Wake-on-LAN packets. A UDP broadcast from the bridge
+#               network never reaches the LAN, so this one container (same image
+#               as the backend) runs in the host network. It listens on a Unix
+#               socket only, has no port, and takes nothing but a MAC address.
 #
 # TLS (mandatory, automatic):
 #   Each container generates its own self-signed certificate on first start and
@@ -60,6 +64,7 @@ services:
       PORT: ${PORT:-7337}
     volumes:
       - tls_certs:/app/certs
+      - wake_socket:/run/pontifex
     networks:
       - pontifex-net
     healthcheck:
@@ -70,6 +75,38 @@ services:
       interval: 30s
       timeout: 5s
       start_period: 10s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Wake relay – the only container in the host network
+  # ---------------------------------------------------------------------------
+  wake-relay:
+    image: ghcr.io/claaswenk/pontifex-backend:${PONTIFEX_TAG:-latest}
+    container_name: pontifex-wake-relay
+    restart: unless-stopped
+    # No TLS and no entrypoint script needed: run the relay directly.
+    entrypoint: ["python", "-c", "from app.services import run_wake_relay; run_wake_relay()"]
+    network_mode: host
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Where the packet goes. Use the broadcast address of your LAN, e.g.
+      # 192.168.1.255 (see .env.example). Not changeable through the API.
+      WOL_BROADCAST: ${WOL_BROADCAST:-255.255.255.255}
+      WOL_PORT: ${WOL_PORT:-9}
+    volumes:
+      - wake_socket:/run/pontifex
+    healthcheck:
+      test: >
+        python -c "import os, stat, sys;
+        sys.exit(0 if stat.S_ISSOCK(os.stat('/run/pontifex/wake.sock').st_mode) else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
       retries: 3
 
   # ---------------------------------------------------------------------------
@@ -113,6 +150,10 @@ volumes:
 
   # Persistent TLS certificate and private key of the frontend
   frontend_tls_certs:
+    driver: local
+
+  # Unix socket between backend and wake relay. Nothing but the socket is in it.
+  wake_socket:
     driver: local
 
 # =============================================================================

@@ -29,6 +29,16 @@ podman compose up -d         # pulls the published images from GHCR
 
 Pin a version instead of `latest` by setting `PONTIFEX_TAG=v1.0.0` (or `sha-<commit>`) in `.env`.
 
+### Wake-on-LAN
+
+A UDP broadcast from the container network never reaches your LAN. That is why the stack has a third container, `wake-relay`: it uses the host network, has no port, and only listens on a Unix socket shared with the backend. The backend sends it a MAC address and nothing else; the destination is fixed in `.env`.
+
+1. Set `WOL_BROADCAST` in `.env` to the broadcast address of your LAN. It is the `brd` value in `ip -4 -br addr`, e.g. `192.168.178.255`. The default `255.255.255.255` works on many networks, the exact address is more reliable.
+2. Start the stack: `podman compose up -d`. `podman ps` shows `pontifex-wake-relay` as healthy.
+3. Prepare the device you want to wake: enable *Wake on LAN* / *Wake on PCIe* in its BIOS, switch off *ErP/EuP*, and make sure the operating system keeps it on, e.g. on Linux `sudo ethtool <nic> | grep Wake-on` must show `g` (on Fedora/Ubuntu: `nmcli connection modify "<connection>" 802-3-ethernet.wake-on-lan magic`). The device needs a cable; waking over Wi-Fi rarely works.
+
+The relay is the only container in the host network. If you do not need Wake-on-LAN, remove the `wake-relay` service from `docker-compose.yml`.
+
 ### Build from the local sources
 
 Use this before the images are published, or to test changes before a commit. The images are built with plain `podman build` (as in the CI) and tagged `local`, so compose starts them without pulling:
