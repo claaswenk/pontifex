@@ -21,8 +21,11 @@ COPY src/database/entrypoint.sh /entrypoint.sh
 RUN groupadd --system --gid 10001 app \
     && useradd --system --no-create-home --uid 10001 --gid 10001 app \
     && mkdir -p /app/certs \
+    && mkdir -p /app/data \
     && chown -R 10001:10001 /app/certs \
     && chmod 700 /app/certs \
+    && chown -R 10001:10001 /app/data \
+    && chmod -R 755 /app/data \
     && chmod +x /entrypoint.sh
 
 ENV PORT=13110 \

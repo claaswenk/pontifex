@@ -20,16 +20,74 @@ class DatabaseService:
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or os.environ.get("DB_PATH", "database.sqlite")
         self._connection: Optional[Connection] = None
+        self._ensure_database_path()
         self._ensure_database()
+
+    def _ensure_database_path(self) -> None:
+        """Ensure the database directory exists and is writable."""
+        db_path = self.db_path
+        db_dir = os.path.dirname(db_path)
+
+        # If there's a directory component, ensure it exists
+        if db_dir and db_dir != '':
+            try:
+                os.makedirs(db_dir, mode=0o755, exist_ok=True)
+                logger.info(f"Ensured database directory exists: {db_dir}")
+            except PermissionError as e:
+                logger.error(f"Permission denied creating directory {db_dir}: {e}")
+
+        # Test if we can write to the database location
+        if not os.path.exists(db_path):
+            try:
+                # Create and remove a test file
+                test_path = f"{db_path}.tmp_test"
+                with open(test_path, 'w') as f:
+                    f.write('test')
+                os.remove(test_path)
+                logger.info(f"Database location {db_path} is writable")
+            except PermissionError as e:
+                logger.error(f"Permission denied writing to {db_path}: {e}")
+                logger.error(f"Current user UID/GID: {os.getuid()}/{os.getgid()}")
+
+                # Try to get directory info
+                try:
+                    dir_path = db_dir if db_dir else '.'
+                    stat = os.stat(dir_path)
+                    logger.error(f"Directory {dir_path} permissions: {oct(stat.st_mode)}")
+                    logger.error(f"Directory {dir_path} owner: {stat.st_uid}:{stat.st_gid}")
+                except Exception:
+                    pass
+
+                raise RuntimeError(
+                    f"Cannot write to database at {db_path}. "
+                    f"User {os.getuid()} needs write permissions."
+                )
 
     def _get_connection(self) -> Connection:
         """Get or create the database connection."""
         if self._connection is None:
             if not os.path.exists(self.db_path):
-                logger.warning(f"Database file not found at {self.db_path}, creating...")
-            self._connection = sqlite3.connect(self.db_path)
-            self._connection.row_factory = sqlite3.Row
-            self._connection.execute("PRAGMA foreign_keys = ON")
+                logger.info(f"Database file not found at {self.db_path}, will be created")
+
+            try:
+                # SQLite needs write permissions on the directory AND the file
+                self._connection = sqlite3.connect(self.db_path)
+                self._connection.row_factory = sqlite3.Row
+                self._connection.execute("PRAGMA foreign_keys = ON")
+                logger.info(f"Connected to database at {self.db_path}")
+            except sqlite3.OperationalError as e:
+                logger.error(f"Failed to open database {self.db_path}: {e}")
+                logger.error(f"Current user UID/GID: {os.getuid()}/{os.getgid()}")
+
+                # Try to provide helpful debugging info
+                try:
+                    db_dir = os.path.dirname(self.db_path) if self.db_path else '.'
+                    stat = os.stat(db_dir)
+                    logger.error(f"Directory {db_dir} permissions: {oct(stat.st_mode)}")
+                except Exception:
+                    pass
+
+                raise RuntimeError(f"Cannot open database: {e}")
         return self._connection
 
     def _ensure_database(self) -> None:
@@ -39,9 +97,15 @@ class DatabaseService:
         if os.path.exists(schema_path):
             with open(schema_path, 'r') as f:
                 schema = f.read()
-            conn.executescript(schema)
-            conn.commit()
-            logger.info("Database schema initialized")
+            try:
+                conn.executescript(schema)
+                conn.commit()
+                logger.info("Database schema initialized")
+            except sqlite3.OperationalError as e:
+                logger.error(f"Failed to initialize schema: {e}")
+                raise
+        else:
+            logger.warning(f"Schema file not found at {schema_path}, using existing database")
 
     # ------------------------------------------------------------------
     # User operations
@@ -61,14 +125,19 @@ class DatabaseService:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        cursor.execute(
-            "INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)",
-            (username, password, 1)
-        )
-        user_id = cursor.lastrowid
-        conn.commit()
-        logger.info(f"Created admin user: {username} (ID: {user_id})")
-        return user_id, username
+        try:
+            cursor.execute(
+                "INSERT INTO users (username, password) VALUES (?, ?)",
+                (username, password)
+            )
+            user_id = cursor.lastrowid
+            conn.commit()
+            logger.info(f"Created admin user: {username} (ID: {user_id})")
+            return user_id, username
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Failed to create admin: {e}")
+            raise
 
     def create_user(self, username: str, password: str) -> Tuple[int, str]:
         """
@@ -84,14 +153,19 @@ class DatabaseService:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        cursor.execute(
-            "INSERT INTO users (username, password) VALUES (?, ?)",
-            (username, password)
-        )
-        user_id = cursor.lastrowid
-        conn.commit()
-        logger.info(f"Created user: {username} (ID: {user_id})")
-        return user_id, username
+        try:
+            cursor.execute(
+                "INSERT INTO users (username, password) VALUES (?, ?)",
+                (username, password)
+            )
+            user_id = cursor.lastrowid
+            conn.commit()
+            logger.info(f"Created user: {username} (ID: {user_id})")
+            return user_id, username
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Failed to create user: {e}")
+            raise
 
     def get_user(self, username: str) -> Optional[sqlite3.Row]:
         """
@@ -125,7 +199,6 @@ class DatabaseService:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # Get user_id
         user = self.get_user(username)
         if user is None:
             logger.warning(f"User not found: {username}")
@@ -134,12 +207,10 @@ class DatabaseService:
         user_id = user["user_id"]
 
         try:
-            # Delete connections
             cursor.execute(
                 "DELETE FROM mapping WHERE user_id = ?",
                 (user_id,)
             )
-            # Delete user
             cursor.execute(
                 "DELETE FROM users WHERE user_id = ?",
                 (user_id,)
@@ -170,14 +241,19 @@ class DatabaseService:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        cursor.execute(
-            "INSERT INTO devices (devicename, device_address) VALUES (?, ?)",
-            (device_name, address)
-        )
-        device_id = cursor.lastrowid
-        conn.commit()
-        logger.info(f"Created device: {device_name} (ID: {device_id}, address: {address})")
-        return device_id, device_name
+        try:
+            cursor.execute(
+                "INSERT INTO devices (devicename, device_address) VALUES (?, ?)",
+                (device_name, address)
+            )
+            device_id = cursor.lastrowid
+            conn.commit()
+            logger.info(f"Created device: {device_name} (ID: {device_id}, address: {address})")
+            return device_id, device_name
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Failed to create device: {e}")
+            raise
 
     def get_device_by_name(self, device_name: str) -> Optional[sqlite3.Row]:
         """
@@ -244,12 +320,10 @@ class DatabaseService:
         device_id = device["device_id"]
 
         try:
-            # Delete connections
             cursor.execute(
                 "DELETE FROM mapping WHERE device_id = ?",
                 (device_id,)
             )
-            # Delete device
             cursor.execute(
                 "DELETE FROM devices WHERE device_id = ?",
                 (device_id,)
@@ -299,7 +373,6 @@ class DatabaseService:
             logger.info(f"Created connection: {username} -> {device_name}")
             return True
         except sqlite3.IntegrityError:
-            # Connection already exists
             logger.warning(f"Connection already exists: {username} -> {device_name}")
             return False
         except Exception as e:
