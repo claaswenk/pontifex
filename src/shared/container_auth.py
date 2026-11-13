@@ -211,20 +211,37 @@ class ContainerAuth:
         def decorator(f):
             @wraps(f)
             def decorated(*args, **kwargs):
-                try:
-                    g.container_peer, g.container_nonce = self._verify_request(allowed)
-                except ContainerAuthError as exc:
-                    log.warning("Container authentication rejected: %s", exc)
+                if g.get("container_peer") not in allowed:
+                    log.warning("Container authentication rejected: no valid proof from %s", allowed)
                     return jsonify({"error": "Unauthorized."}), 401
-                except (RuntimeError, OSError) as exc:
-                    log.error("Container authentication unavailable: %s", exc)
-                    return jsonify({"error": "Container authentication not configured."}), 503
                 return f(*args, **kwargs)
             return decorated
         return decorator
 
     def init_app(self, app) -> None:
-        """Sign the responses of authenticated requests so the caller can verify us."""
+        """
+        Verify signed requests and sign their responses.
+
+        Every request that carries container headers is verified here, on any
+        route. A valid one is answered with a proof, so a peer that forwards a
+        user token (``require_role`` routes) can still verify the backend.
+        Requests without container headers pass untouched: the public API
+        needs no container secret. Wrongly signed requests are rejected.
+        """
+        @app.before_request
+        def verify_signed_request():
+            if not any(h in request.headers for h in (HEADER_ID, HEADER_SIGNATURE)):
+                return None
+            try:
+                g.container_peer, g.container_nonce = self._verify_request(self.peers)
+            except ContainerAuthError as exc:
+                log.warning("Container authentication rejected: %s", exc)
+                return jsonify({"error": "Unauthorized."}), 401
+            except (RuntimeError, OSError) as exc:
+                log.error("Container authentication unavailable: %s", exc)
+                return jsonify({"error": "Container authentication not configured."}), 503
+            return None
+
         @app.after_request
         def add_proof(response):
             nonce = g.get("container_nonce")
@@ -259,9 +276,13 @@ class ContainerClient:
         self._host = url.hostname
         self._port = url.port or 443
 
-    def request(self, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
+    def request(self, method: str, path: str, body: dict | None = None,
+                headers: dict[str, str] | None = None) -> tuple[int, dict]:
         """
         One authenticated round trip. ``path`` must be plain ASCII without a query string.
+
+        ``headers`` carries extra request headers, e.g. ``Authorization: Bearer <token>``
+        for routes that need a user token. They never replace the container headers.
 
         Raises ContainerAuthError if the peer cannot prove it holds the secret,
         ContainerUnavailableError if it cannot be reached.
@@ -287,10 +308,11 @@ class ContainerClient:
                 raise ContainerAuthError("peer presented no certificate")
             fingerprint = fingerprint_of_der(der)
 
-            headers = self._auth.sign_request(self._peer, method, path, payload, fingerprint)
+            signed = self._auth.sign_request(self._peer, method, path, payload, fingerprint)
+            send = {**(headers or {}), **signed}
             if payload:
-                headers["Content-Type"] = "application/json"
-            connection.request(method, path, body=payload or None, headers=headers)
+                send["Content-Type"] = "application/json"
+            connection.request(method, path, body=payload or None, headers=send)
             response = connection.getresponse()
             raw = response.read()
             status, proof = response.status, response.getheader(HEADER_PROOF)
@@ -300,7 +322,7 @@ class ContainerClient:
             connection.close()
 
         self._auth.verify_response(
-            self._peer, method, path, headers[HEADER_NONCE], status, raw, fingerprint, proof
+            self._peer, method, path, signed[HEADER_NONCE], status, raw, fingerprint, proof
         )
         try:
             data = json.loads(raw or b"{}")

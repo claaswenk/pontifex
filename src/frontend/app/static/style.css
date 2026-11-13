@@ -1,42 +1,242 @@
+/* Pontifex UI. Plain CSS only: the Content-Security-Policy allows no scripts,
+   no inline styles and no external fonts or images. */
+
+:root {
+  --bg: #f4f4f4;
+  --surface: #ffffff;
+  --border: #e0e0e0;
+  --text: #161616;
+  --muted: #525252;
+  --header: #161616;
+  --accent: #0f62fe;
+  --online: #198038;
+  --online-bg: #defbe6;
+  --offline: #da1e28;
+  --offline-bg: #fff1f1;
+  --notice-bg: #edf5ff;
+}
+
+* { box-sizing: border-box; }
+
 body {
   margin: 0;
   min-height: 100vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #f4f4f4;
-  color: #161616;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
 }
 
-.card {
-  background: #ffffff;
-  border: 1px solid #e0e0e0;
-  padding: 2rem 3rem;
-  min-width: 18rem;
+/* ---- top bar ---------------------------------------------------------- */
+
+.topbar {
+  background: var(--header);
+  color: #ffffff;
 }
 
-h1 {
-  margin: 0 0 0.25rem;
+.topbar__inner {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 1rem;
 }
+
+.brand {
+  padding: 0.9rem 0;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+  text-decoration: none;
+}
+
+.topbar nav {
+  display: flex;
+}
+
+.topbar nav a {
+  display: flex;
+  align-items: center;
+  padding: 0 1rem;
+  color: #c6c6c6;
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+}
+
+.topbar nav a:hover {
+  background: #262626;
+  color: #ffffff;
+}
+
+.topbar nav a[aria-current="page"] {
+  color: #ffffff;
+  border-bottom-color: var(--accent);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---- page ------------------------------------------------------------- */
+
+.page {
+  flex: 1;
+  width: 100%;
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+}
+
+h1 { margin: 0 0 0.25rem; font-size: 1.75rem; font-weight: 400; }
+h2 { margin: 0 0 1rem; font-size: 1.1rem; font-weight: 600; }
+
+.lead { margin: 0 0 1.5rem; color: var(--muted); }
+
+.notice {
+  margin: 0 0 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--notice-bg);
+  border-left: 4px solid var(--accent);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 1.25rem 1.5rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+}
+
+/* ---- summary tiles ---------------------------------------------------- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--border);
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.tile--online { border-top-color: var(--online); }
+.tile--offline { border-top-color: var(--offline); }
+
+.tile__value { font-size: 2rem; line-height: 1.2; }
+.tile__label { color: var(--muted); font-size: 0.875rem; }
+
+/* ---- table ------------------------------------------------------------ */
+
+.panel:has(.table-wrap) { padding: 0; }
+
+.table-wrap { overflow-x: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 0.75rem 1.25rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+thead th {
+  background: #f4f4f4;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+tbody tr + tr td { border-top: 1px solid var(--border); }
+tbody tr:hover { background: #f9f9f9; }
+
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 0.9em; }
+
+.empty { margin: 0; padding: 2rem; text-align: center; color: var(--muted); }
+
+/* ---- online / offline status ------------------------------------------ */
+/* The dot is never the only signal: the word next to it carries the state too. */
 
 .status {
-  margin: 0 0 1.5rem;
-  color: #198038;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.1rem 0.6rem 0.1rem 0.5rem;
+  border-radius: 1rem;
+  font-size: 0.875rem;
   font-weight: 600;
 }
 
-dl {
+.dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status--online { color: var(--online); background: var(--online-bg); }
+.status--offline { color: var(--offline); background: var(--offline-bg); }
+
+/* ---- account ---------------------------------------------------------- */
+
+.facts {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.5rem 1.5rem;
+  gap: 0.6rem 1.5rem;
   margin: 0;
 }
 
-dt {
-  color: #525252;
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+
+.badge {
+  display: inline-block;
+  padding: 0 0.6rem;
+  border-radius: 1rem;
+  background: #e8daff;
+  color: #491d8b;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: capitalize;
 }
 
-dd {
-  margin: 0;
+/* ---- footer ----------------------------------------------------------- */
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: 64rem;
+  width: 100%;
+  margin: 0 auto;
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+@media (max-width: 36rem) {
+  .tiles { grid-template-columns: 1fr; }
+  th, td { padding: 0.6rem 0.9rem; }
+  .footer { flex-direction: column; gap: 0.25rem; }
 }
