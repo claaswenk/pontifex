@@ -75,6 +75,24 @@ class BackendAuth(BaseAuth):
         refresh_token = self.database.create_refresh_token(username)
         return refresh_token, self.issue_access_token(username, credentials["role"])
 
+    def delete_own_account(self, username: str, current: str, address: str) -> bool:
+        """
+        Delete the caller's account (with devices and sessions) after proving
+        the current password. False if the password is wrong.
+
+        Wrong guesses count against the same limit as the login, so a stolen
+        access token cannot be used to delete an account.
+        """
+        self.throttle.check(username, address)
+
+        credentials = self.database.get_credentials(username)
+        if credentials is None or not self.verify_password(current, credentials["pw_hash"]):
+            self.throttle.failure(username, address)
+            return False
+
+        self.throttle.success(username, address)
+        return self.database.delete_user(username)
+
     def login(self, username: str, password: str, address: str) -> tuple[str, str, str] | None:
         """
         Check a username and password. Returns (refresh_token, access_token, role),

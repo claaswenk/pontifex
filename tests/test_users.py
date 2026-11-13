@@ -171,6 +171,55 @@ class UserManagementTest(unittest.TestCase):
         right = {"current_password": PW, "new_password": PW2}
         self.assertEqual(self.client.put("/api/me/password", json=right, headers=headers).status_code, 429)
 
+    # -- delete own account ----------------------------------------------------------
+
+    def _delete_me(self, headers, password=PW):
+        return self.client.delete("/api/me", json={"current_password": password}, headers=headers)
+
+    def test_user_deletes_own_account_and_admin_can_recreate_it(self):
+        self._add()
+        old = self.client.post("/api/login", json={"username": "anna", "password": PW}).get_json()
+        headers = {"Authorization": f"Bearer {old['access_token']}"}
+        self.db.create_device("anna", "nas", "192.168.1.10", "00:11:22:33:44:55")
+
+        r = self._delete_me(headers)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json(), {"username": "anna"})
+        self.assertFalse(self.db.exists("anna"))
+        self.assertEqual(self.db.list_devices("anna"), [])
+        self.assertEqual(self.client.post("/api/token", json={"refresh_token": old["refresh_token"]}).status_code, 401)
+        self.assertEqual(self.client.get("/api/me", headers=headers).status_code, 401)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW}).status_code, 401)
+
+        self.assertEqual(self._add(password=PW2).status_code, 201)
+        self.assertEqual(self.client.post("/api/login", json={"username": "anna", "password": PW2}).status_code, 200)
+        self.assertEqual(self.db.list_devices("anna"), [])
+
+    def test_delete_own_account_needs_the_current_password(self):
+        self._add()
+        headers = self._user_headers()
+        for body in ({"current_password": "wrong-wrong-wrong"}, {}, {"current_password": 5}, {"current_password": ""}):
+            with self.subTest(body=str(body)):
+                r = self.client.delete("/api/me", json=body, headers=headers)
+                self.assertEqual(r.status_code, 403)
+        self.assertTrue(self.db.exists("anna"))
+
+    def test_delete_own_account_needs_a_token(self):
+        self.assertEqual(self.client.delete("/api/me", json={"current_password": PW}).status_code, 401)
+
+    def test_admin_cannot_delete_own_account(self):
+        self.assertEqual(self._delete_me(self.admin).status_code, 409)
+        self.assertTrue(self.db.exists("root"))
+
+    def test_guessing_the_password_to_delete_an_account_is_throttled(self):
+        self._add()
+        headers = self._user_headers()
+        for _ in range(5):
+            self.assertEqual(self._delete_me(headers, "wrong-wrong-wrong").status_code, 403)
+        self.assertEqual(self._delete_me(headers, "wrong-wrong-wrong").status_code, 429)
+        self.assertEqual(self._delete_me(headers).status_code, 429)
+        self.assertTrue(self.db.exists("anna"))
+
     def test_database_down_is_503(self):
         self.db.down = True
         self.assertEqual(self.client.get("/api/users", headers=self.admin).status_code, 503)

@@ -182,7 +182,9 @@ class RelayServerTest(unittest.TestCase):
         self.path = os.path.join(self.dir, "wake.sock")
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(self.path)
-        self.listener.listen(4)
+        # Room for the whole burst in test_connections_beyond_the_limit...,
+        # so a slow accept loop cannot make connect() fail with ECONNREFUSED.
+        self.listener.listen(services.MAX_RELAY_CONNECTIONS + 4)
         self.sent = []
         self.thread = threading.Thread(
             target=services.serve_wake_relay, args=(self.listener, self.sent.append), daemon=True)
