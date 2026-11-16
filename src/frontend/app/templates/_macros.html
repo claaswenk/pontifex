@@ -1,0 +1,12 @@
+{# A round picture field. The file input is a real one (works without JavaScript);
+   app.js only adds the preview. The caller body is the current picture or a placeholder. #}
+{% macro picture_field(label, invalid=False) %}
+<div class="pic-field">
+  <input id="image" name="image" type="file" class="sr-only" accept="image/png,image/jpeg,image/webp" data-picture-input{% if invalid %} aria-invalid="true"{% endif %}>
+  <label class="pic-pick" for="image" title="Choose a picture">
+    {{ caller() }}
+    <canvas class="pic-pick__preview" width="144" height="144" hidden></canvas>
+  </label>
+  <span class="pic-field__text">{{ label }}</span>
+</div>
+{% endmacro %}

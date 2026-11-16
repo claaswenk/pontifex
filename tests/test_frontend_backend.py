@@ -107,12 +107,30 @@ class Flow(unittest.TestCase):
         self.assertIn("Password changed", self.page("/account"))
         self.assertEqual(self.client.get("/devices", base_url=BASE).status_code, 200)
 
-        # anna: own devices only, no user management
+        # anna: the admin chose her password, so the first sign-in only leads to the password change
         anna = self.app.test_client()
         response = self.post("/login", {"username": "anna", "password": PW}, anna)
         self.assertEqual(response.status_code, 303)
+        self.assertTrue(response.headers["Location"].endswith("/account/new-password"))
+        for path in ("/devices", "/users", "/account"):
+            blocked = anna.get(path, base_url=BASE)
+            self.assertEqual(blocked.status_code, 302, path)
+            self.assertTrue(blocked.headers["Location"].endswith("/account/new-password"), path)
+        self.assertIn("Choose your password", anna.get("/account/new-password", base_url=BASE).get_data(as_text=True))
+
+        # the temporary password cannot be kept
+        self.post("/account/password", {"current_password": PW, "new_password": PW,
+                                        "new_password_confirm": PW}, anna)
+        self.assertIn("must differ", anna.get("/account/new-password", base_url=BASE).get_data(as_text=True))
+        self.assertEqual(anna.get("/devices", base_url=BASE).status_code, 302)
+
+        # her own password: now she is in, with own devices only and no user management
+        response = self.post("/account/password", {"current_password": PW, "new_password": PW + "3",
+                                                   "new_password_confirm": PW + "3"}, anna)
+        self.assertTrue(response.headers["Location"].endswith("/devices"))
         self.assertIn("No devices yet", anna.get("/devices", base_url=BASE).get_data(as_text=True))
         self.assertEqual(anna.get("/users", base_url=BASE).status_code, 403)
+        self.assertEqual(anna.get("/account/new-password", base_url=BASE).status_code, 302)
 
         # anna cannot touch the admin's device
         self.post(f"/devices/{device_id}/delete", client=anna)

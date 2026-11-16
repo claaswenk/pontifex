@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% from "_macros.html" import picture_field %}
+{% block title %}Edit {{ device.name }}{% endblock %}
+
+{% block content %}
+<h1>Edit device</h1>
+<p class="lead"><a href="{{ url_for('devices') }}">Back to the devices</a></p>
+
+<section class="panel" aria-labelledby="edit-title">
+  <h2 id="edit-title">{{ device.name }}</h2>
+  <form method="post" action="{{ url_for('edit_device', device_id=device.id) }}" class="form form--row" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% call picture_field("Change picture", form.invalid('image')) %}
+    {% if device.picture is not none %}
+    <img class="pic-pick__img" src="{{ url_for('device_picture', device_id=device.id, v=device.picture) }}" width="72" height="72" alt="">
+    {% else %}
+    <svg class="device-icon pic-pick__placeholder" width="40" height="40" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#icon-device"/></svg>
+    {% endif %}
+    {% endcall %}
+    <div>
+      <label for="name">Name</label>
+      <input id="name" name="name" type="text" maxlength="64" value="{{ form.values.get('name', device.name) }}"{% if form.invalid('name') %} aria-invalid="true"{% endif %} required>
+    </div>
+    <div>
+      <label for="address">Address</label>
+      <input id="address" name="address" type="text" maxlength="253" value="{{ form.values.get('address', device.address) }}"{% if form.invalid('address') %} aria-invalid="true"{% endif %} required>
+    </div>
+    <div>
+      <label for="mac">MAC address</label>
+      <input id="mac" name="mac" type="text" maxlength="17" placeholder="aa:bb:cc:dd:ee:ff" value="{{ form.values.get('mac', device.mac) }}"{% if form.invalid('mac') %} aria-invalid="true"{% endif %} required>
+    </div>
+    <button type="submit" class="button">Save</button>
+  </form>
+  <p class="hint">A picture is PNG, JPEG or WebP, at most 200 KB. Without a new file the current picture stays.</p>
+  {% if device.picture is not none %}
+  <form method="post" action="{{ url_for('delete_device_picture', device_id=device.id) }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="button button--danger button--small">Remove picture</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

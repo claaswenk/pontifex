@@ -17,15 +17,26 @@
   <header class="topbar">
     <div class="topbar__inner">
       <a class="brand" href="{{ url_for('devices') }}">Pontifex</a>
-      {% if user %}
+      {% if user and not user.must_change %}
       <nav aria-label="Main">
         <a href="{{ url_for('devices') }}"{% if active == 'devices' %} aria-current="page"{% endif %}>Devices</a>
         {% if user.role == 'admin' %}
         <a href="{{ url_for('users') }}"{% if active == 'users' %} aria-current="page"{% endif %}>Users</a>
         {% endif %}
         <a href="{{ url_for('account') }}"{% if active == 'account' %} aria-current="page"{% endif %}>
-          <span class="avatar avatar--small avatar--{{ user.role }}" aria-hidden="true">{{ user.username[:1] | upper }}</span>Account
+          {% if user.picture is not none %}
+          <img class="avatar avatar--small" src="{{ url_for('account_picture', v=user.picture) }}" width="26" height="26" alt="">
+          {% else %}
+          <span class="avatar avatar--small avatar--{{ user.role }}" aria-hidden="true">{{ user.username[:1] | upper }}</span>
+          {% endif %}Account
         </a>
+        <form method="post" action="{{ url_for('logout') }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="nav-button">Sign out</button>
+        </form>
+      </nav>
+      {% elif user %}
+      <nav aria-label="Main">
         <form method="post" action="{{ url_for('logout') }}" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="nav-button">Sign out</button>
@@ -37,7 +48,7 @@
 
   <main class="page">
     {% for kind, text in flashes %}
-    <p class="notice notice--{{ kind }}" role="{{ 'alert' if kind == 'error' else 'status' }}">{{ text }}</p>
+    <p class="notice notice--{{ kind }}" data-flash role="{{ 'alert' if kind == 'error' else 'status' }}">{{ text }}</p>
     {% endfor %}
     {% block content %}{% endblock %}
   </main>

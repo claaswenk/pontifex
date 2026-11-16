@@ -18,7 +18,7 @@ RUN apt-get update \
 COPY src/frontend/run.py .
 COPY src/frontend/app/ ./app/
 COPY src/shared/ ./shared/
-COPY src/frontend/entrypoint.sh /entrypoint.sh
+COPY src/shared/entrypoint.sh /entrypoint.sh
 
 RUN groupadd --system --gid 10001 app \
     && useradd --system --no-create-home --uid 10001 --gid 10001 app \

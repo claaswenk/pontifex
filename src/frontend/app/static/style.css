@@ -108,7 +108,9 @@ h2 { margin: 0 0 1rem; font-size: 1.1rem; font-weight: 600; }
   padding: 0.75rem 1rem;
   background: var(--notice-bg);
   border-left: 4px solid var(--accent);
+  transition: opacity 0.6s ease;
 }
+.notice.is-fading { opacity: 0; }
 
 .panel {
   background: var(--surface);
@@ -203,6 +205,13 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-si
 .status--online { color: var(--online); background: var(--online-bg); }
 .status--offline { color: var(--offline); background: var(--offline-bg); }
 
+/* Online: the dot sends out a soft ring, like a heartbeat. */
+.status--online .dot { animation: pulse 2s ease-out infinite; }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(66, 190, 101, 0.7); }
+  70%, 100% { box-shadow: 0 0 0 0.5rem rgba(66, 190, 101, 0); }
+}
+
 /* ---- account ---------------------------------------------------------- */
 
 .facts {
@@ -260,6 +269,20 @@ input[type="text"], input[type="password"] {
   font: inherit;
 }
 
+/* A refused field keeps what was typed and is marked. */
+input[aria-invalid="true"] { border-color: var(--offline); box-shadow: 0 0 0 1px var(--offline); }
+
+input[type="file"] { max-width: 100%; color: var(--muted); font: inherit; font-size: 0.875rem; }
+input[type="file"]::file-selector-button {
+  margin-right: 0.6rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid #34456c;
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
 input:focus-visible, button:focus-visible {
   outline: 2px solid var(--link);
   outline-offset: 1px;
@@ -280,8 +303,32 @@ input:focus-visible, button:focus-visible {
 
 .button:hover { background: var(--accent-hover); }
 .button--small { padding: 0.25rem 0.8rem; font-size: 0.875rem; }
+.button--secondary { background: var(--surface-2); border: 1px solid #34456c; color: var(--text); text-decoration: none; display: inline-block; }
+.button--secondary:hover { background: #26324f; }
 .button--danger { background: #da1e28; }
 .button--danger:hover { background: #ba1b23; }
+
+/* A button that waits for the server shows a spinner. */
+.button.is-loading { position: relative; color: transparent; cursor: progress; }
+.button.is-loading::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1em;
+  height: 1em;
+  margin: -0.5em 0 0 -0.5em;
+  border: 2px solid #ffffff;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .button.is-loading::after { animation-duration: 2s; }
+  .status--online .dot { animation: none; }
+  .notice { transition: none; }
+}
 
 .inline { display: inline-flex; gap: 0.5rem; align-items: center; margin: 0; }
 
@@ -467,6 +514,8 @@ body:has(.auth) {
   color: #ffffff;
   font-weight: 600;
   line-height: 1;
+  object-fit: cover;
+  vertical-align: middle;
 }
 
 .avatar--admin { background: #dbe5fa; color: #0a1a3f; }
@@ -475,8 +524,45 @@ body:has(.auth) {
 
 .device-name { display: inline-flex; align-items: center; gap: 0.6rem; }
 .device-icon { flex: none; fill: currentColor; }
-.device-icon--online { color: var(--online); }
-.device-icon--offline { color: #6c7a96; }
+tr[data-state="online"] .device-icon { color: var(--online); }
+tr[data-state="offline"] .device-icon { color: #6c7a96; }
+
+/* A device's own picture: round, with the ring colour of its state. */
+.pic {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid #6c7a96;
+}
+tr[data-state="online"] .pic { border-color: var(--online); }
+
+/* The round picture field of the forms. */
+.pic-field { display: flex; flex-direction: column; align-items: center; gap: 0.35rem; margin-bottom: 0.5rem; }
+.form--row > .pic-field { flex: none; }
+.pic-field__text { color: var(--muted); font-size: 0.8rem; }
+.pic-field .pic-pick {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 4.5rem;
+  height: 4.5rem;
+  margin: 0;
+  border: 2px dashed #34456c;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--surface-2);
+  color: #6c7a96;
+  cursor: pointer;
+}
+.pic-field .pic-pick:hover, .pic-field input:focus-visible + .pic-pick { border-color: var(--link); }
+.pic-pick .avatar--large { width: 100%; height: 100%; margin: 0; }
+.pic-pick__img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.pic-pick__preview { position: absolute; inset: 0; width: 100%; height: 100%; }
+.pic-pick__preview[hidden] { display: none; }
+.pic-pick.has-preview > :not(canvas) { visibility: hidden; }
 
 /* ---- footer ----------------------------------------------------------- */
 

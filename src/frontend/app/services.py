@@ -42,6 +42,20 @@ class SessionExpired(Exception):
 # ---------------------------------------------------------------------------
 
 @dataclass
+class FormState:
+    """What a refused form keeps for its next display: the values (never secrets) and the fields to mark."""
+    page: str = ""
+    values: dict = field(default_factory=dict)
+    errors: set = field(default_factory=set)
+
+    def value(self, name: str) -> str:
+        return self.values.get(name, "")
+
+    def invalid(self, name: str) -> bool:
+        return name in self.errors
+
+
+@dataclass
 class Session:
     id: str
     csrf: str
@@ -52,7 +66,10 @@ class Session:
     refresh_token: str | None = None
     access_token: str | None = None
     access_expires: float = 0.0
+    picture: int | None = None  # version of the account's picture, None without one
+    must_change: bool = False  # the password was chosen by somebody else: only the password change is open
     flashes: list = field(default_factory=list)  # [(kind, text)], shown once
+    form: FormState | None = None  # shown once, on the page it belongs to
 
     @property
     def authenticated(self) -> bool:
@@ -95,7 +112,8 @@ class SessionStore:
             self._sessions[session.id] = session
             return session
 
-    def get(self, session_id: str) -> Session | None:
+    def get(self, session_id: str, touch: bool = True) -> Session | None:
+        """The live session. ``touch=False`` (background polling) does not count as activity."""
         if not session_id:
             return None
         with self._lock:
@@ -106,7 +124,8 @@ class SessionStore:
             if self._expired(session, now):
                 del self._sessions[session_id]
                 return None
-            session.last_seen = now
+            if touch:
+                session.last_seen = now
             return session
 
     def promote(self, old: Session, username: str, role: str, refresh_token: str,
