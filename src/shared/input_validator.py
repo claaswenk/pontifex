@@ -25,6 +25,7 @@ How it protects:
   never inspected: they may contain any character.
 """
 
+import base64
 import ipaddress
 import logging
 import re
@@ -67,6 +68,7 @@ class InputValidator:
     MAX_ADDRESS_LENGTH = 253
     MAX_TOKEN_LENGTH = 128
     MAX_ID = 2**63 - 1          # what the database can hold
+    MAX_IMAGE_BYTES = 200 * 1024
     ROLES = ("admin", "user")
 
     USERNAME_RULE = "Username must be 3-64 characters: lower case letters, digits, '.', '_' or '-'."
@@ -76,6 +78,7 @@ class InputValidator:
     MAC_RULE = "MAC must be six hex pairs such as AA:BB:CC:DD:EE:FF and must be a unicast address."
     INVALID_VALUE_MESSAGE = "Invalid token."
     BODY_RULE = "A JSON object is required."
+    IMAGE_RULE = "Picture must be a PNG, JPEG or WebP image of at most 200 KB."
 
     # ------------------------------------------------------------------
     # Building blocks
@@ -223,3 +226,38 @@ class InputValidator:
         if int(digits[1], 16) & 1 or digits == "0" * 12:  # group bit set (includes ff:ff:...)
             cls._reject(field, cls.MAC_RULE, text)
         return ":".join(digits[i:i + 2] for i in range(0, 12, 2))
+
+    # ------------------------------------------------------------------
+    # Pictures
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def image(cls, value, field: str = "image") -> tuple[str, bytes]:
+        """
+        ``(media type, bytes)`` of a picture sent as base64 text.
+
+        The type comes from the first bytes, never from what the sender claims.
+        Only PNG, JPEG and WebP pass: nothing that can carry script (SVG) or
+        that a browser would have to guess.
+        """
+        limit = cls.MAX_IMAGE_BYTES * 4 // 3 + 8
+        text = cls._string(value, field, cls.IMAGE_RULE, limit, scan=False)
+        try:
+            raw = base64.b64decode(text, validate=True)
+        except ValueError:
+            cls._reject(field, cls.IMAGE_RULE, scan=False)
+        return cls.image_bytes(raw, field)
+
+    @classmethod
+    def image_bytes(cls, raw, field: str = "image") -> tuple[str, bytes]:
+        """Same check for bytes that are already decoded (an upload)."""
+        if not isinstance(raw, (bytes, bytearray)) or not 12 <= len(raw) <= cls.MAX_IMAGE_BYTES:
+            cls._reject(field, cls.IMAGE_RULE, scan=False)
+        raw = bytes(raw)
+        if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png", raw
+        if raw.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg", raw
+        if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+            return "image/webp", raw
+        cls._reject(field, cls.IMAGE_RULE, scan=False)
