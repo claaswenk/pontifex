@@ -25,9 +25,6 @@ ALIVE_CHECK_PORTS = (22, 80, 443, 445, 3389)
 
 _START_TIME = time.time()
 
-def process_pontifex_logic():
-    return True
-
 # ---------------------------------------------------------------------------
 # Wake-on-LAN
 #
@@ -319,8 +316,10 @@ def check_devices(devices):
             "id": device.get("id"),
             "name": device.get("name", ""),
             "address": device.get("address", ""),
+            "mac": device.get("mac", ""),
             "status": "online" if answered else "offline",
             "latency_ms": min(answered) if answered else None,
+            "picture": device.get("picture"),
         })
     return results
 

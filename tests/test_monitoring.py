@@ -89,6 +89,11 @@ class CheckDevicesTest(unittest.TestCase):
         self.assertEqual([d["status"] for d in result], ["online", "online", "offline"])
         self.assertIsNotNone(result[0]["latency_ms"])
         self.assertIsNone(result[2]["latency_ms"])
+    def test_the_mac_is_part_of_the_answer(self):
+        result = self._check([{"id": 1, "name": "nas", "address": "192.168.1.10", "mac": "aa:bb:cc:dd:ee:01"}])
+        self.assertEqual(result[0]["mac"], "aa:bb:cc:dd:ee:01")
+
+
 
     def test_forbidden_address_is_offline_and_never_connected(self):
         with mock.patch.object(services.socket, "create_connection") as connect:

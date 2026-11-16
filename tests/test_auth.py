@@ -7,7 +7,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "src"), os.path.join(ROOT, "src", "backend")]
 
 from shared.auth import BaseAuth  # noqa: E402
-from app.database_client import DatabaseClient  # noqa: E402
+from app.database_client import DatabaseClient, DatabaseUnavailableError  # noqa: E402
 from tests.fake_database import FakeDatabase  # noqa: E402
 
 
@@ -76,6 +76,7 @@ class BackendAuthFlowTest(unittest.TestCase):
         )
 
         # a regular user logs in and reaches the device routes, but cannot manage users
+        self.db.settle("svc")  # as if the admin's password was replaced already
         tok = self.client.post("/api/login", json={"username": "svc", "password": PW}).get_json()
         r = self.client.get("/api/devices", headers=self._bearer(tok["access_token"]))
         self.assertEqual(r.status_code, 200)
@@ -117,8 +118,8 @@ class BackendAuthFlowTest(unittest.TestCase):
             create_app(database=FakeDatabase())
 
 
-class DatabaseClientStubTest(unittest.TestCase):
-    """The real client is not written yet: every operation must refuse, never pretend."""
+class UnconnectedDatabaseClientTest(unittest.TestCase):
+    """Without a database container every operation must refuse, never pretend."""
 
     def test_every_operation_raises(self):
         client = DatabaseClient()
@@ -143,20 +144,21 @@ class DatabaseClientStubTest(unittest.TestCase):
             lambda: client.delete_device("a", 1),
         )
         for call in calls:
-            with self.assertRaises(NotImplementedError):
+            with self.assertRaises(DatabaseUnavailableError):
                 call()
 
-    def test_backend_with_stub_grants_nothing(self):
+    def test_backend_without_database_grants_nothing(self):
         os.environ.update(
             SECRETS,
             JWT_SECRET="test-jwt-secret-with-at-least-32-bytes",
             INITIAL_API_KEY="initial-key",
         )
+        os.environ.pop("DATABASE_URL", None)
         from app import create_app
         client = create_app().test_client()
         r = client.post("/api/create-user/admin", json={"username": "root", "password": PW},
                         headers={"Authorization": "Bearer initial-key"})
-        self.assertGreaterEqual(r.status_code, 500)
+        self.assertEqual(r.status_code, 503)
 
 
 class SharedAuthTest(unittest.TestCase):
