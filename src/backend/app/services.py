@@ -238,6 +238,10 @@ def system_stats():
 
 
 _HOSTNAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$", re.IGNORECASE)
+INTERNAL_BLOCKED_HOSTNAMES = frozenset({
+    "database", "frontend", "backend", "wake-relay",
+    "pontifex-database", "pontifex-frontend", "pontifex-backend", "pontifex-wake-relay",
+})
 
 
 def _resolve_safe_ip(address):
@@ -245,14 +249,17 @@ def _resolve_safe_ip(address):
     The IP to probe, or None if the address is invalid or not allowed.
 
     Loopback, link-local (incl. cloud metadata 169.254.169.254), multicast,
-    unspecified and reserved targets are refused, so the endpoint cannot be
-    used to probe the backend's own host or internal services. Private LAN
-    ranges stay allowed: they are what is being monitored. Names are resolved
+    unspecified, reserved targets, and internal container hostnames are refused,
+    so the endpoint cannot be used to probe the backend's own host or internal services.
+    Private LAN ranges stay allowed: they are what is being monitored. Names are resolved
     once here and the probe connects to that IP, so the checked address and
     the connected address cannot differ.
     """
     address = (address or "").strip()
     if not address or len(address) > 253:
+        return None
+
+    if address.lower() in INTERNAL_BLOCKED_HOSTNAMES:
         return None
 
     try:
@@ -354,8 +361,10 @@ class LoginThrottle:
         self._failures: dict[tuple, list[float]] = {}
 
     @staticmethod
-    def _keys(username: str, address: str) -> tuple[tuple, tuple]:
-        return ("account", username.casefold(), address), ("address", address)
+    def _keys(username: str, address: str, is_trusted_peer: bool = False) -> list[tuple]:
+        if is_trusted_peer:
+            return [("account", username.casefold())]
+        return [("account", username.casefold(), address), ("address", address)]
 
     def _recent(self, key: tuple, now: float) -> list[float]:
         stamps = [t for t in self._failures.get(key, ()) if now - t < self.WINDOW_SECONDS]
@@ -368,27 +377,29 @@ class LoginThrottle:
     def _retry_after(self, stamps: list[float], now: float) -> int:
         return max(1, math.ceil(stamps[0] + self.WINDOW_SECONDS - now))
 
-    def check(self, username: str, address: str) -> None:
+    def check(self, username: str, address: str, is_trusted_peer: bool = False) -> None:
         """Raise LoginThrottled if this attempt must not even be evaluated."""
-        account_key, address_key = self._keys(username, address)
+        keys = self._keys(username, address, is_trusted_peer)
         with self._lock:
             now = self._clock()
-            for key, limit in ((account_key, self.MAX_PER_ACCOUNT), (address_key, self.MAX_PER_ADDRESS)):
+            for key in keys:
+                limit = self.MAX_PER_ACCOUNT if key[0] == "account" else self.MAX_PER_ADDRESS
                 stamps = self._recent(key, now)
                 if len(stamps) >= limit:
                     raise LoginThrottled(self._retry_after(stamps, now))
 
-    def failure(self, username: str, address: str) -> None:
+    def failure(self, username: str, address: str, is_trusted_peer: bool = False) -> None:
         with self._lock:
             now = self._clock()
-            for key in self._keys(username, address):
+            for key in self._keys(username, address, is_trusted_peer):
                 if key not in self._failures and len(self._failures) >= self.MAX_KEYS:
                     self._make_room(now)
                 self._failures.setdefault(key, []).append(now)
 
-    def success(self, username: str, address: str) -> None:
+    def success(self, username: str, address: str, is_trusted_peer: bool = False) -> None:
         with self._lock:
-            self._failures.pop(self._keys(username, address)[0], None)
+            account_key = self._keys(username, address, is_trusted_peer)[0]
+            self._failures.pop(account_key, None)
 
     def _make_room(self, now: float) -> None:
         for key in list(self._failures):
@@ -396,6 +407,34 @@ class LoginThrottle:
         if len(self._failures) >= self.MAX_KEYS:
             stalest = min(self._failures, key=lambda k: self._failures[k][-1])
             del self._failures[stalest]
+
+
+# ---------------------------------------------------------------------------
+# Wake throttle / cooldown
+# ---------------------------------------------------------------------------
+
+class WakeThrottled(Exception):
+    def __init__(self, retry_after: int) -> None:
+        super().__init__("wake request throttled")
+        self.retry_after = retry_after
+
+
+class WakeThrottle:
+    COOLDOWN_SECONDS = 5
+
+    def __init__(self, clock=time.monotonic) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._last_wake: dict[int, float] = {}
+
+    def check_and_record(self, device_id: int) -> None:
+        with self._lock:
+            now = self._clock()
+            last = self._last_wake.get(device_id, 0.0)
+            elapsed = now - last
+            if elapsed < self.COOLDOWN_SECONDS:
+                raise WakeThrottled(max(1, math.ceil(self.COOLDOWN_SECONDS - elapsed)))
+            self._last_wake[device_id] = now
 
 
 # ---------------------------------------------------------------------------

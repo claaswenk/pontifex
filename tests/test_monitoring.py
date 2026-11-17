@@ -46,6 +46,10 @@ class ResolveSafeIpTest(unittest.TestCase):
         for address in ("127.0.0.1", "::1", "169.254.169.254", "0.0.0.0", "224.0.0.1", "240.0.0.1"):
             self.assertIsNone(services._resolve_safe_ip(address), address)
 
+    def test_internal_container_hostnames_are_refused(self):
+        for host in ("database", "frontend", "backend", "wake-relay", "pontifex-database"):
+            self.assertIsNone(services._resolve_safe_ip(host), host)
+
     def test_garbage_is_refused(self):
         for address in ("", "   ", None, "http://192.168.1.10", "a b", "host/path", "-bad.example", "a" * 300):
             self.assertIsNone(services._resolve_safe_ip(address), repr(address))
