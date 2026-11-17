@@ -349,6 +349,17 @@ class LoginAndSetupTest(FrontendCase):
         self.sign_in()
         self.assertTrue(self.get("/login").headers["Location"].endswith("/devices"))
 
+    def test_frontend_login_throttling_after_multiple_failures(self):
+        # 5 failed attempts
+        for _ in range(5):
+            r = self.post("/login", {"username": "root", "password": "wrong-password"})
+            self.assertEqual(r.status_code, 303)
+        # 6th attempt is throttled on the frontend side
+        r = self.post("/login", {"username": "root", "password": "wrong-password"})
+        self.assertEqual(r.status_code, 303)
+        page = self.page("/login")
+        self.assertIn("Too many failed attempts. Try again later.", page)
+
     def test_setup_creates_the_admin_and_signs_in(self):
         self.transport.routes[("POST", "/api/create-user/admin")] = lambda b, t: (
             201, {"refresh_token": "refresh-1", "access_token": "access-1",

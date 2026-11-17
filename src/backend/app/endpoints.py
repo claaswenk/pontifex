@@ -5,6 +5,7 @@ from app.auth import BackendAuth, BootstrapConsumedError
 from app.services import (
     MAX_DEVICES_PER_USER,
     LoginThrottled,
+    WakeThrottled,
     WakeUnavailableError,
     check_devices,
     request_wake,
@@ -112,7 +113,10 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
             return jsonify({"error": "Invalid username or password."}), 401
 
         try:
-            result = auth.login(username, password, request.remote_addr or "unknown")
+            is_peer = bool(g.get("container_peer"))
+            result = auth.login(
+                username, password, request.remote_addr or "unknown", is_trusted_peer=is_peer
+            )
         except LoginThrottled as exc:
             logger.warning("Login throttled")
             response = jsonify({"error": "Too many failed attempts. Try again later."})
@@ -280,7 +284,10 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         new = V.new_password(data.get("new_password"), "new_password")
 
         try:
-            done = auth.reset_password_with_token(token, new, request.remote_addr or "unknown")
+            is_peer = bool(g.get("container_peer"))
+            done = auth.reset_password_with_token(
+                token, new, request.remote_addr or "unknown", is_trusted_peer=is_peer
+            )
         except LoginThrottled as exc:
             logger.warning("Password reset throttled")
             response = jsonify({"error": "Too many failed attempts. Try again later."})
@@ -327,8 +334,9 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         new = V.new_password(data.get("new_password"), "new_password")
 
         try:
+            is_peer = bool(g.get("container_peer"))
             tokens = auth.change_own_password(
-                g.current_user["sub"], current, new, request.remote_addr or "unknown"
+                g.current_user["sub"], current, new, request.remote_addr or "unknown", is_trusted_peer=is_peer
             )
         except LoginThrottled as exc:
             logger.warning("Password change throttled")
@@ -375,8 +383,9 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
             return jsonify({"error": "Current password is wrong."}), 403
 
         try:
+            is_peer = bool(g.get("container_peer"))
             tokens = auth.change_own_username(
-                g.current_user["sub"], current, new_username, request.remote_addr or "unknown"
+                g.current_user["sub"], current, new_username, request.remote_addr or "unknown", is_trusted_peer=is_peer
             )
         except LoginThrottled as exc:
             logger.warning("Username change throttled")
@@ -415,8 +424,9 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
             return jsonify({"error": "Current password is wrong."}), 403
 
         try:
+            is_peer = bool(g.get("container_peer"))
             deleted = auth.delete_own_account(
-                g.current_user["sub"], current, request.remote_addr or "unknown"
+                g.current_user["sub"], current, request.remote_addr or "unknown", is_trusted_peer=is_peer
             )
         except LoginThrottled as exc:
             logger.warning("Account deletion throttled")
@@ -586,6 +596,13 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         device = auth.database.get_device(g.current_user["sub"], device_id)
         if device is None:
             return jsonify({"error": "Device not found."}), 404
+
+        try:
+            auth.wake_throttle.check_and_record(device_id)
+        except WakeThrottled as exc:
+            response = jsonify({"error": "Wake packet was recently sent. Please wait before retrying."})
+            response.headers["Retry-After"] = str(exc.retry_after)
+            return response, 429
 
         try:
             request_wake(device["mac"])

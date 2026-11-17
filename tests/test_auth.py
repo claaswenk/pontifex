@@ -171,6 +171,26 @@ class SharedAuthTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             FrontendAuth().validate_config()
 
+    def test_jwt_secret_too_short_is_refused(self):
+        os.environ.update(SECRETS, JWT_SECRET="too-short", INITIAL_API_KEY="initial-key")
+        from app.auth import BackendAuth
+        auth = BackendAuth(FakeDatabase())
+        with self.assertRaises(RuntimeError) as ctx:
+            auth.validate_config()
+        self.assertIn("at least 32 characters", str(ctx.exception))
+
+    def test_initial_api_key_too_short_is_refused(self):
+        os.environ.update(
+            SECRETS,
+            JWT_SECRET="test-jwt-secret-with-at-least-32-bytes",
+            INITIAL_API_KEY="short",
+        )
+        from app.auth import BackendAuth
+        auth = BackendAuth(FakeDatabase())
+        with self.assertRaises(RuntimeError) as ctx:
+            auth.validate_config()
+        self.assertIn("at least 8 characters", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

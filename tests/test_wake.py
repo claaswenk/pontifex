@@ -364,6 +364,35 @@ class WakeEndpointTest(unittest.TestCase):
     def test_needs_a_token(self):
         self.assertEqual(self.client.post(f"/api/devices/{self.device['id']}/wake").status_code, 401)
 
+    def test_wake_cooldown_throttles_rapid_requests(self):
+        with WakeRelayDouble() as relay:
+            os.environ[services.WAKE_SOCKET_ENV] = relay.path
+            r1 = self._wake()
+            self.assertEqual(r1.status_code, 200)
+            r2 = self._wake()
+            self.assertEqual(r2.status_code, 429)
+            self.assertIn("Retry-After", r2.headers)
+            self.assertIn("recently sent", r2.get_json()["error"])
+
+
+class WakeThrottleUnitTest(unittest.TestCase):
+    def test_throttle_cooldown_behavior(self):
+        now = 1000.0
+        throttle = services.WakeThrottle(clock=lambda: now)
+        throttle.check_and_record(1)  # first time allowed
+
+        # immediate retry is throttled
+        with self.assertRaises(services.WakeThrottled) as ctx:
+            throttle.check_and_record(1)
+        self.assertGreaterEqual(ctx.exception.retry_after, 1)
+
+        # different device is allowed immediately
+        throttle.check_and_record(2)
+
+        # after cooldown elapses, device 1 is allowed again
+        now += services.WakeThrottle.COOLDOWN_SECONDS + 1
+        throttle.check_and_record(1)
+
 
 if __name__ == "__main__":
     unittest.main()

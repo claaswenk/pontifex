@@ -50,6 +50,23 @@ class LoginThrottleTest(unittest.TestCase):
             self.throttle.check("someone-new", "10.0.0.1")
         self.throttle.check("someone-new", "10.0.0.2")
 
+    def test_trusted_peer_is_not_blocked_by_address_throttle(self):
+        # A trusted peer (like the frontend container) should not have all users blocked
+        # just because 30 attempts failed across different accounts.
+        for i in range(LoginThrottle.MAX_PER_ADDRESS + 10):
+            self.throttle.check(f"user{i}", "172.18.0.3", is_trusted_peer=True)
+            self.throttle.failure(f"user{i}", "172.18.0.3", is_trusted_peer=True)
+        # New account from the peer is still allowed:
+        self.throttle.check("legit-user", "172.18.0.3", is_trusted_peer=True)
+
+    def test_trusted_peer_still_throttles_single_account(self):
+        # A single account attacked through a peer is still throttled after MAX_PER_ACCOUNT.
+        for _ in range(LoginThrottle.MAX_PER_ACCOUNT):
+            self.throttle.check("victim", "172.18.0.3", is_trusted_peer=True)
+            self.throttle.failure("victim", "172.18.0.3", is_trusted_peer=True)
+        with self.assertRaises(LoginThrottled):
+            self.throttle.check("victim", "172.18.0.3", is_trusted_peer=True)
+
     def test_window_expires(self):
         self._fail(times=LoginThrottle.MAX_PER_ACCOUNT)
         self.clock.now += LoginThrottle.WINDOW_SECONDS + 1

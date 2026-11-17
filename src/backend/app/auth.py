@@ -11,13 +11,14 @@ from flask import jsonify
 from shared.auth import BaseAuth
 from shared.errors import BootstrapConsumedError
 from app.database_client import DatabaseClient
-from app.services import LoginThrottle, LoginThrottled
+from app.services import LoginThrottle, LoginThrottled, WakeThrottle
 
 __all__ = ["BackendAuth", "BootstrapConsumedError"]
 
 
 class BackendAuth(BaseAuth):
     INITIAL_KEY_ENV = "INITIAL_API_KEY"
+    MIN_INITIAL_KEY_LENGTH = 8
 
     # A reset token is valid once, for this long. It is never stored in clear:
     # only its SHA-256 goes to the database (it is 256 bits of randomness, so a
@@ -37,6 +38,7 @@ class BackendAuth(BaseAuth):
         super().__init__()
         self.database = database
         self.throttle = LoginThrottle()
+        self.wake_throttle = WakeThrottle()
         # Verified against when the username is unknown, so that an unknown
         # name costs the same time as a wrong password.
         self._dummy_hash = self.hash_password(secrets.token_urlsafe(16))
@@ -44,6 +46,11 @@ class BackendAuth(BaseAuth):
     def validate_config(self) -> None:
         super().validate_config()
         self.database.validate_config()
+        initial_key = os.environ.get(self.INITIAL_KEY_ENV, "")
+        if len(initial_key) < self.MIN_INITIAL_KEY_LENGTH:
+            raise RuntimeError(
+                f"{self.INITIAL_KEY_ENV} must be at least {self.MIN_INITIAL_KEY_LENGTH} characters"
+            )
 
     # ------------------------------------------------------------------
     # Accounts
@@ -66,7 +73,7 @@ class BackendAuth(BaseAuth):
         return self.database.set_password(username, self.hash_password(password), must_change=True)
 
     def change_own_password(
-        self, username: str, current: str, new: str, address: str
+        self, username: str, current: str, new: str, address: str, is_trusted_peer: bool = False
     ) -> tuple[str, str] | None:
         """
         Change a password after proving the current one. Returns a fresh
@@ -77,14 +84,14 @@ class BackendAuth(BaseAuth):
         Raises ValueError if the account must change its password and the new
         one is the old one again.
         """
-        self.throttle.check(username, address)
+        self.throttle.check(username, address, is_trusted_peer)
 
         credentials = self.database.get_credentials(username)
         if credentials is None or not self.verify_password(current, credentials["pw_hash"]):
-            self.throttle.failure(username, address)
+            self.throttle.failure(username, address, is_trusted_peer)
             return None
 
-        self.throttle.success(username, address)
+        self.throttle.success(username, address, is_trusted_peer)
         if credentials["must_change"] and new == current:
             raise ValueError("same password")
         # Revokes every refresh token of the user, on all devices.
@@ -108,23 +115,25 @@ class BackendAuth(BaseAuth):
             return None
         return token
 
-    def reset_password_with_token(self, token: str, new_password: str, address: str) -> bool:
+    def reset_password_with_token(
+        self, token: str, new_password: str, address: str, is_trusted_peer: bool = False
+    ) -> bool:
         """
         Set a new password with a reset token and end every session of the user.
         False for an unknown, used or expired token. Wrong tokens count against
         a per-address limit, so tokens cannot be guessed.
         """
-        self.throttle.check(self._RESET_THROTTLE_KEY, address)
+        self.throttle.check(self._RESET_THROTTLE_KEY, address, is_trusted_peer)
 
         # Hashed before the token is looked up, so a bad token costs the same time.
         pw_hash = self.hash_password(new_password)
         if not self.database.reset_password_with_token(self._hash_reset_token(token), pw_hash):
-            self.throttle.failure(self._RESET_THROTTLE_KEY, address)
+            self.throttle.failure(self._RESET_THROTTLE_KEY, address, is_trusted_peer)
             return False
         return True
 
     def change_own_username(
-        self, username: str, current: str, new_username: str, address: str
+        self, username: str, current: str, new_username: str, address: str, is_trusted_peer: bool = False
     ) -> tuple[str, str] | None:
         """
         Rename the caller's account after proving the current password. Returns a
@@ -134,14 +143,14 @@ class BackendAuth(BaseAuth):
 
         The role is never touched. Wrong guesses count against the login limit.
         """
-        self.throttle.check(username, address)
+        self.throttle.check(username, address, is_trusted_peer)
 
         credentials = self.database.get_credentials(username)
         if credentials is None or not self.verify_password(current, credentials["pw_hash"]):
-            self.throttle.failure(username, address)
+            self.throttle.failure(username, address, is_trusted_peer)
             return None
 
-        self.throttle.success(username, address)
+        self.throttle.success(username, address, is_trusted_peer)
         if new_username == username:
             raise ValueError("same name")
         if not self.database.rename_user(username, new_username):
@@ -151,7 +160,9 @@ class BackendAuth(BaseAuth):
         refresh_token = self.database.create_refresh_token(new_username)
         return refresh_token, self.issue_access_token(new_username, credentials["role"])
 
-    def delete_own_account(self, username: str, current: str, address: str) -> bool:
+    def delete_own_account(
+        self, username: str, current: str, address: str, is_trusted_peer: bool = False
+    ) -> bool:
         """
         Delete the caller's account (with devices and sessions) after proving
         the current password. False if the password is wrong.
@@ -159,34 +170,36 @@ class BackendAuth(BaseAuth):
         Wrong guesses count against the same limit as the login, so a stolen
         access token cannot be used to delete an account.
         """
-        self.throttle.check(username, address)
+        self.throttle.check(username, address, is_trusted_peer)
 
         credentials = self.database.get_credentials(username)
         if credentials is None or not self.verify_password(current, credentials["pw_hash"]):
-            self.throttle.failure(username, address)
+            self.throttle.failure(username, address, is_trusted_peer)
             return False
 
-        self.throttle.success(username, address)
+        self.throttle.success(username, address, is_trusted_peer)
         return self.database.delete_user(username)
 
-    def login(self, username: str, password: str, address: str) -> tuple[str, str, str, bool] | None:
+    def login(
+        self, username: str, password: str, address: str, is_trusted_peer: bool = False
+    ) -> tuple[str, str, str, bool] | None:
         """
         Check a username and password. Returns (refresh_token, access_token, role,
         must_change), or None for every kind of failure (unknown user, wrong password).
 
         Raises LoginThrottled when too many attempts failed recently.
         """
-        self.throttle.check(username, address)
+        self.throttle.check(username, address, is_trusted_peer)
 
         credentials = self.database.get_credentials(username)
         stored_hash = credentials["pw_hash"] if credentials else self._dummy_hash
         password_ok = self.verify_password(password, stored_hash)
 
         if credentials is None or not password_ok:
-            self.throttle.failure(username, address)
+            self.throttle.failure(username, address, is_trusted_peer)
             return None
 
-        self.throttle.success(username, address)
+        self.throttle.success(username, address, is_trusted_peer)
         refresh_token = self.database.create_refresh_token(credentials["username"])
         access_token = self.issue_access_token(credentials["username"], credentials["role"])
         return refresh_token, access_token, credentials["role"], credentials["must_change"]

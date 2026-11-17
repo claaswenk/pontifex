@@ -30,6 +30,10 @@ services:
     image: ghcr.io/claaswenk/pontifex-backend:${PONTIFEX_TAG:-latest}
     container_name: pontifex-backend
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     ports:
       # Local only by default. Use a specific host IP to expose it, never 0.0.0.0.
       - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${PORT:-7337}:${PORT:-7337}"
@@ -68,6 +72,10 @@ services:
     image: ghcr.io/claaswenk/pontifex-database:${PONTIFEX_TAG:-latest}
     container_name: pontifex-database
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     # No published port: only the backend reaches it, over the compose network.
     environment:
       # Only the secret shared with the backend; no JWT secret, no frontend secret
@@ -118,6 +126,10 @@ services:
     image: ghcr.io/claaswenk/pontifex-frontend:${PONTIFEX_TAG:-latest}
     container_name: pontifex-frontend
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-8443}:8443"
     environment:
