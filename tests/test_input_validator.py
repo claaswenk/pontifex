@@ -6,6 +6,7 @@ Run with:
 """
 
 import ast
+import base64
 import logging
 import os
 import sys
@@ -146,6 +147,40 @@ class DeviceTest(unittest.TestCase):
         for value in (0, -1, 2**63, True, "1", 1.0, None, [1]):
             with self.subTest(value=repr(value)):
                 self.assertTrue(refused(V.device_id, value))
+
+
+class ImageTest(unittest.TestCase):
+    PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+    JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 20
+    WEBP = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 20
+
+    def test_png_jpeg_and_webp_pass_with_the_type_taken_from_the_bytes(self):
+        for raw, media in ((self.PNG, "image/png"), (self.JPEG, "image/jpeg"), (self.WEBP, "image/webp")):
+            with self.subTest(media=media):
+                self.assertEqual(V.image(base64.b64encode(raw).decode()), (media, raw))
+                self.assertEqual(V.image_bytes(raw), (media, raw))
+
+    def test_anything_else_is_refused(self):
+        refused_content = (b"<svg xmlns='http://www.w3.org/2000/svg'/>", b"GIF89a" + b"x" * 30, b"MZ" + b"\x00" * 30,
+                           b"<html><script>1</script></html>", b"short", b"", b"RIFF\x00\x00\x00\x00WAVE" + b"x" * 20)
+        for raw in refused_content:
+            with self.subTest(raw=raw[:8]):
+                self.assertTrue(refused(V.image_bytes, raw))
+                self.assertTrue(refused(V.image, base64.b64encode(raw).decode()))
+
+    def test_the_size_limit_is_exact(self):
+        ok = self.PNG + b"x" * (V.MAX_IMAGE_BYTES - len(self.PNG))
+        self.assertEqual(V.image_bytes(ok)[0], "image/png")
+        self.assertTrue(refused(V.image_bytes, ok + b"x"))
+        self.assertTrue(refused(V.image, base64.b64encode(ok + b"x").decode()))
+
+    def test_bad_base64_and_wrong_types_are_refused(self):
+        for value in ("not base64!", "iVBO Rw0K", "====", None, 5, ["a"], b"bytes", "A" * 400_000):
+            with self.subTest(value=repr(value)[:20]):
+                self.assertTrue(refused(V.image, value))
+        for value in ("text", 5, None, [1]):
+            with self.subTest(value=repr(value)):
+                self.assertTrue(refused(V.image_bytes, value))
 
 
 class StructureTest(unittest.TestCase):

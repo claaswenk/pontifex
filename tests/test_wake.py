@@ -315,6 +315,7 @@ class WakeEndpointTest(unittest.TestCase):
         ).get_json()
         self.admin = {"Authorization": f"Bearer {admin['access_token']}"}
         self.client.post("/api/users", json={"username": "anna", "password": PW}, headers=self.admin)
+        self.db.settle("anna")  # as if the admin's password was replaced already
         token = self.client.post("/api/login", json={"username": "anna", "password": PW}).get_json()
         self.anna = {"Authorization": f"Bearer {token['access_token']}"}
         self.device = self.client.post(

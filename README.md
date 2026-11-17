@@ -1,8 +1,8 @@
 # pontifex
 
 [![CI](https://github.com/claaswenk/pontifex/actions/workflows/ci.yml/badge.svg)](https://github.com/claaswenk/pontifex/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white)](Containerfile)
-[![Container](https://img.shields.io/badge/container-podman-892CA0?logo=podman&logoColor=white)](Containerfile)
+[![Python](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white)](requirements.in)
+[![Container](https://img.shields.io/badge/container-podman-892CA0?logo=podman&logoColor=white)](docker-compose.yml)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-FAB040?logo=pre-commit&logoColor=white)](.pre-commit-config.yaml)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot&logoColor=white)](.github/dependabot.yml)
 [![Stars](https://img.shields.io/github/stars/claaswenk/pontifex?style=flat&logo=github)](https://github.com/claaswenk/pontifex/stargazers)
@@ -15,19 +15,37 @@
 
 ```bash
 git clone https://github.com/claaswenk/pontifex.git && cd pontifex
-./scripts/init-env.sh        # creates .env with random secrets
+./scripts/init-env.sh        # creates .env with random secrets and prints INITIAL_API_KEY
 podman compose up -d         # pulls the published images from GHCR
+podman compose ps            # backend, frontend and wake-relay become "healthy"
 ```
+
+Then open `https://127.0.0.1:8443`, accept the certificate warning once and follow "First start? Create the administrator" on the login page. The setup key is the `INITIAL_API_KEY` from `.env`; it works once. After that sign in and add your first device (name, address and MAC address).
+
+Further users are added by the administrator on the **Users** page. The administrator chooses the first password, so a new user has to replace it at the first sign-in before anything else is open. The same happens after the administrator sets a new password for a user.
 
 | Service | URL |
 |---|---|
 | Frontend | `https://127.0.0.1:8443` |
-| Backend | `https://127.0.0.1:7337/api/health` |
+| Backend (REST API, see [`docs/api.md`](docs/api.md)) | `https://127.0.0.1:7337/api/health` |
 
-- Both containers create their own self-signed certificate on first start (kept in named volumes). Your browser warns once.
-- Both ports are bound to `127.0.0.1`. To reach them from other machines set `FRONTEND_BIND_ADDRESS` / `BACKEND_BIND_ADDRESS` in `.env` to a specific host IP, never `0.0.0.0`. For the frontend also set `TLS_EXTRA_SANS`, see [`.env.example`](.env.example).
-- `./scripts/init-env.sh` prints `INITIAL_API_KEY`. It is needed once to create the first admin. The script never overwrites an existing `.env`.
-- The database container is not part of the stack yet, so endpoints that need it answer with an error.
+- Every container creates its own self-signed certificate on first start (kept in named volumes).
+- The database container has no published port. Only the backend reaches it, over the compose network.
+- Both published ports are bound to `127.0.0.1`. To reach the frontend from another machine, see [Access from other machines](#access-from-other-machines).
+- `./scripts/init-env.sh` never overwrites an existing `.env`. If the ports 8443 or 7337 are taken, set `FRONTEND_PORT` and `PORT` in `.env`.
+
+What the UI does: the device list shows state, latency and MAC address and refreshes by itself every 10 seconds. Devices can be edited, woken and given a round picture; the account page sets a profile picture. A wrong input keeps everything typed and marks only the refused field.
+
+### Access from other machines
+
+Only the frontend is meant to be reached from outside. Keep the backend on `127.0.0.1`.
+
+1. In `.env` set `FRONTEND_BIND_ADDRESS` to the IP of the host in your LAN (never `0.0.0.0`) and `TLS_EXTRA_SANS` to the name or IP you will type in the browser, e.g. `TLS_EXTRA_SANS=IP:192.168.178.20,DNS:pontifex.local`.
+2. The certificate is created on the first start only. If the stack already ran, recreate it: `podman compose down -v`, then `podman compose up -d`. This also deletes the database.
+3. Open the port in the host firewall, e.g. `sudo firewall-cmd --add-port=8443/tcp --permanent && sudo firewall-cmd --reload`.
+4. Browse to `https://<host-ip>:8443` and accept the certificate warning once.
+
+The traffic is encrypted, but the self-signed certificate is not trusted by browsers. Do not expose the port to the internet; put a reverse proxy with a real certificate in front of it if you need that.
 
 Pin a version instead of `latest` by setting `PONTIFEX_TAG=v1.0.0` (or `sha-<commit>`) in `.env`.
 
@@ -41,6 +59,8 @@ A UDP broadcast from the container network never reaches your LAN. That is why t
 
 The relay is the only container in the host network. If you do not need Wake-on-LAN, remove the `wake-relay` service from `docker-compose.yml`.
 
+**Nothing happens although the UI says "Magic packet sent"?** The message only means that the packet was handed to the network. Check in this order: the device wakes with a tool on the host (`wakeonlan <mac>`, `ether-wake`); `WOL_BROADCAST` is the broadcast address of the LAN the device is in; the host is wired to that LAN. A Podman machine behind NAT (Windows/WSL2, macOS) never forwards the broadcast to the LAN; run the stack on a Linux host in the LAN.
+
 ### Build from the local sources
 
 Use this before the images are published, or to test changes before a commit. The images are built with plain `podman build` (as in the CI) and tagged `local`, so compose starts them without pulling:
@@ -48,6 +68,7 @@ Use this before the images are published, or to test changes before a commit. Th
 ```bash
 podman build -t ghcr.io/claaswenk/pontifex-backend:local  -f src/backend/Containerfile .
 podman build -t ghcr.io/claaswenk/pontifex-frontend:local -f src/frontend/Containerfile .
+podman build -t ghcr.io/claaswenk/pontifex-database:local -f src/database/Containerfile .
 PONTIFEX_TAG=local podman compose up -d
 ```
 
@@ -66,11 +87,12 @@ pre-commit install
 
 Before each commit, the hooks run Gitleaks, Hadolint, Bandit and basic file checks. Hook versions are pinned to commit SHAs.
 
-Run the same checks manually:
+Run the same checks manually, and the tests (they need the packages of `requirements.txt` in a Python 3.11 environment):
 
 ```bash
 pre-commit run --all-files
 uvx pip-audit -r requirements.txt --no-deps --disable-pip
+python -m unittest discover -s tests -t .
 ```
 
 ## Input validation
@@ -105,9 +127,9 @@ Defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Every gate be
 | `secrets-and-lint` | Gitleaks over the full history, Hadolint |
 | `sast` | Bandit, severity MEDIUM or higher |
 | `dependency-audit` | `pip-audit`, any known vulnerability |
-| `build` | Per service (backend, frontend): Podman build, SBOM (CycloneDX), Trivy HIGH/CRITICAL, non-root check, smoke test without a mounted certificate (as in a real deployment), healthcheck |
+| `build` | Per service (backend, frontend, database): Podman build, SBOM (CycloneDX), Trivy HIGH/CRITICAL, non-root check, smoke test without a mounted certificate (as in a real deployment), healthcheck |
 | `dast` | OWASP ZAP baseline against the backend. Manual run or `test/dast-**` branches only |
-| `publish` | Push both images to GHCR from `main` or a `v*` tag, after `build` passes. Pushes the tested images without rebuilding. For tags it first checks the format (`v1.2.3`) and that the commit is on `main` |
+| `publish` | Push all three images to GHCR from `main` or a `v*` tag, after `build` passes. Pushes the tested images without rebuilding. For tags it first checks the format (`v1.2.3`) and that the commit is on `main` |
 | `release` | Only for `v*` tags, after `publish`: creates the GitHub Release with generated notes and the image digests. The only job with write access to repository contents |
 
 Reports are uploaded as workflow artifacts: `sast-report`, `dependency-audit-report`, `sbom-<service>`, `container-image-<service>` and `dast-report`.
@@ -120,6 +142,7 @@ Published images (tags: `sha-<commit>`, `v*` on version tags, `latest` on `main`
 ```bash
 podman pull ghcr.io/claaswenk/pontifex-backend:sha-<commit>
 podman pull ghcr.io/claaswenk/pontifex-frontend:sha-<commit>
+podman pull ghcr.io/claaswenk/pontifex-database:sha-<commit>
 ```
 
 > [!TIP]
@@ -149,7 +172,7 @@ Versions follow `vMAJOR.MINOR.PATCH`: `PATCH` for fixes, `MINOR` for new feature
    git push origin v0.1.0
    ```
 
-4. Watch the run for the tag under **Actions**. It builds and scans both images again, checks the tag, publishes `pontifex-backend:v0.1.0` and `pontifex-frontend:v0.1.0`, and creates the release.
+4. Watch the run for the tag under **Actions**. It builds and scans all three images again, checks the tag, publishes `pontifex-backend:v0.1.0`, `pontifex-frontend:v0.1.0` and `pontifex-database:v0.1.0`, and creates the release.
 5. On the server set `PONTIFEX_TAG=v0.1.0` in `.env`, then:
 
    ```bash

@@ -1,3 +1,4 @@
+import base64
 import os
 import sys
 import unittest
@@ -10,6 +11,9 @@ from tests.fake_database import FakeDatabase  # noqa: E402
 from tests.test_auth import PW, SECRETS  # noqa: E402
 
 MAC = "AA:BB:CC:DD:EE:01"
+PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * 20).decode()
+WEBP = base64.b64encode(b"RIFF\x10\x00\x00\x00WEBPVP8 ").decode()
+SVG = base64.b64encode(b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>").decode()
 
 
 class ValidationTest(unittest.TestCase):
@@ -66,6 +70,7 @@ class DeviceEndpointsTest(unittest.TestCase):
         self.anna = self._login("anna")
 
     def _login(self, name):
+        self.db.settle(name)  # as if the admin's password was replaced already
         token = self.client.post("/api/login", json={"username": name, "password": PW}).get_json()
         return {"Authorization": f"Bearer {token['access_token']}"}
 
@@ -142,12 +147,118 @@ class DeviceEndpointsTest(unittest.TestCase):
 
     def test_everything_needs_a_token(self):
         self.assertEqual(self.client.get("/api/devices").status_code, 401)
+        self.assertEqual(self.client.get("/api/devices/1").status_code, 401)
+        self.assertEqual(self.client.put("/api/devices/1", json={}).status_code, 401)
         self.assertEqual(self.client.post("/api/devices", json={}).status_code, 401)
         self.assertEqual(self.client.delete("/api/devices/1").status_code, 401)
 
     def test_database_down_is_503(self):
         self.db.down = True
         self.assertEqual(self.client.get("/api/devices", headers=self.anna).status_code, 503)
+
+    def test_a_refusal_names_the_field(self):
+        r = self._add(mac="nope")
+        self.assertEqual((r.status_code, r.get_json()["field"]), (400, "mac"))
+        self._add()
+        r = self._add(address="192.168.1.11")
+        self.assertEqual((r.status_code, r.get_json()["field"]), (409, "name"))
+
+    def test_one_own_device_can_be_fetched(self):
+        device = self._add().get_json()
+        r = self.client.get(f"/api/devices/{device['id']}", headers=self.anna)
+        self.assertEqual((r.status_code, r.get_json()), (200, device))
+        self.assertEqual(self.client.get(f"/api/devices/{device['id']}", headers=self.admin).status_code, 404)
+        self.assertEqual(self.client.get("/api/devices/999", headers=self.anna).status_code, 404)
+
+    def test_a_device_can_be_edited_and_keeps_its_picture(self):
+        device = self._add(image=PNG).get_json()
+        r = self.client.put(f"/api/devices/{device['id']}", headers=self.anna, json={
+            "name": " NAS 2 ", "address": "NAS.fritz.box", "mac": "AA-BB-CC-DD-EE-02"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            {k: r.get_json()[k] for k in ("id", "name", "address", "mac", "picture")},
+            {"id": device["id"], "name": "NAS 2", "address": "nas.fritz.box",
+             "mac": "aa:bb:cc:dd:ee:02", "picture": device["picture"]})
+        listed = self.client.get("/api/devices", headers=self.anna).get_json()["devices"]
+        self.assertEqual([d["name"] for d in listed], ["NAS 2"])
+
+    def test_an_edit_may_keep_the_own_name_but_not_take_another_one(self):
+        first = self._add().get_json()
+        self._add(name="other")
+        same = {"name": "nas", "address": "192.168.1.11", "mac": MAC}
+        self.assertEqual(self.client.put(f"/api/devices/{first['id']}", json=same, headers=self.anna).status_code, 200)
+        r = self.client.put(f"/api/devices/{first['id']}", json={**same, "name": "other"}, headers=self.anna)
+        self.assertEqual((r.status_code, r.get_json()["field"]), (409, "name"))
+
+    def test_an_invalid_edit_is_400_names_the_field_and_changes_nothing(self):
+        device = self._add().get_json()
+        good = {"name": "nas", "address": "192.168.1.10", "mac": MAC}
+        for field, value in (("name", ""), ("address", "127.0.0.1"), ("mac", "ff:ff:ff:ff:ff:ff")):
+            with self.subTest(field=field):
+                r = self.client.put(f"/api/devices/{device['id']}", json={**good, field: value}, headers=self.anna)
+                self.assertEqual((r.status_code, r.get_json()["field"]), (400, field))
+        self.assertEqual(self.client.put(f"/api/devices/{device['id']}", json={}, headers=self.anna).status_code, 400)
+        self.assertEqual(self.client.get("/api/devices", headers=self.anna).get_json()["devices"], [device])
+
+    def test_somebody_elses_device_cannot_be_edited(self):
+        device = self._add().get_json()
+        r = self.client.put(f"/api/devices/{device['id']}", headers=self.admin,
+                            json={"name": "x", "address": "192.168.1.10", "mac": MAC})
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(self.client.get("/api/devices", headers=self.anna).get_json()["devices"], [device])
+
+    def test_a_picture_can_come_with_the_device_and_is_served_back(self):
+        device = self._add(image=PNG).get_json()
+        self.assertIsInstance(device["picture"], int)
+        r = self.client.get(f"/api/devices/{device['id']}/picture", headers=self.anna)
+        self.assertEqual((r.status_code, r.get_json()["media_type"], r.get_json()["image"]), (200, "image/png", PNG))
+        self.assertEqual(self.client.get("/api/devices", headers=self.anna).get_json()["devices"][0]["picture"],
+                         device["picture"])
+
+    def test_replace_and_delete_a_device_picture(self):
+        device_id = self._add().get_json()["id"]
+        url = f"/api/devices/{device_id}/picture"
+        self.assertEqual(self.client.get(url, headers=self.anna).status_code, 404)
+        r = self.client.put(url, json={"image": WEBP}, headers=self.anna)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.client.get(url, headers=self.anna).get_json()["media_type"], "image/webp")
+        self.assertEqual(self.client.delete(url, headers=self.anna).status_code, 200)
+        self.assertEqual(self.client.delete(url, headers=self.anna).status_code, 404)
+
+    def test_a_picture_must_be_a_real_png_jpeg_or_webp_of_small_size(self):
+        device_id = self._add().get_json()["id"]
+        url = f"/api/devices/{device_id}/picture"
+        too_big = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * 250_000).decode()
+        for bad in (SVG, too_big, "***", "", 5, None, ["a"]):
+            with self.subTest(bad=str(bad)[:12]):
+                self.assertEqual(self.client.put(url, json={"image": bad}, headers=self.anna).status_code, 400)
+        self.assertEqual(self._add(name="other", image=SVG).status_code, 400)
+        self.assertEqual(self.client.get(url, headers=self.anna).status_code, 404)
+
+    def test_somebody_elses_device_picture_is_404_for_every_call(self):
+        device_id = self._add(image=PNG).get_json()["id"]
+        url = f"/api/devices/{device_id}/picture"
+        self.assertEqual(self.client.get(url, headers=self.admin).status_code, 404)
+        self.assertEqual(self.client.put(url, json={"image": PNG}, headers=self.admin).status_code, 404)
+        self.assertEqual(self.client.delete(url, headers=self.admin).status_code, 404)
+        self.assertEqual(self.client.get(url, headers=self.anna).status_code, 200)
+
+    def test_the_own_picture_and_its_version_in_me(self):
+        self.assertIsNone(self.client.get("/api/me", headers=self.anna).get_json()["picture"])
+        self.assertEqual(self.client.get("/api/me/picture", headers=self.anna).status_code, 404)
+        version = self.client.put("/api/me/picture", json={"image": PNG}, headers=self.anna).get_json()["picture"]
+        self.assertEqual(self.client.get("/api/me", headers=self.anna).get_json()["picture"], version)
+        self.assertEqual(self.client.get("/api/me/picture", headers=self.anna).get_json()["image"], PNG)
+        self.assertIsNone(self.client.get("/api/me", headers=self.admin).get_json()["picture"])
+        self.assertEqual(self.client.put("/api/me/picture", json={"image": SVG}, headers=self.anna).status_code, 400)
+        self.assertEqual(self.client.delete("/api/me/picture", headers=self.anna).status_code, 200)
+        self.assertEqual(self.client.delete("/api/me/picture", headers=self.anna).status_code, 404)
+
+    def test_pictures_need_a_token(self):
+        for method, path in (("get", "/api/me/picture"), ("put", "/api/me/picture"), ("delete", "/api/me/picture"),
+                             ("get", "/api/devices/1/picture"), ("put", "/api/devices/1/picture")):
+            with self.subTest(path=path, method=method):
+                self.assertEqual(getattr(self.client, method)(path, json={}).status_code, 401)
 
     def test_metrics_reports_the_device_id(self):
         device_id = self._add().get_json()["id"]

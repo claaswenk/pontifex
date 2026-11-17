@@ -4,7 +4,7 @@ from flask import Flask, jsonify
 def create_app(backend=None, sessions=None) -> Flask:
     """``backend`` and ``sessions`` can be replaced in tests; in production they are built from the environment."""
     app = Flask(__name__)
-    # No upload is ever expected: forms are tiny.
+    # Forms are tiny. The routes that take a picture raise the limit for themselves (pages.py).
     app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
     from app.auth import FrontendAuth
@@ -25,7 +25,7 @@ def create_app(backend=None, sessions=None) -> Flask:
     def set_security_headers(response):
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
-            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+            "connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
         )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"

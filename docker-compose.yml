@@ -1,48 +1,31 @@
-# =============================================================================
-# Pontifex – Compose (podman compose / docker compose, Linux)
-# =============================================================================
-# Quick start (pulls the images published by the CI pipeline):
+# Pontifex - Compose (podman compose / docker compose)
 #
 #   ./scripts/init-env.sh        # creates .env with random secrets
-#   podman compose up -d
+#   podman compose up -d         # pulls the images published by the CI pipeline
 #
-# Frontend: https://127.0.0.1:8443  (self-signed certificate, see below)
-# Backend:  https://127.0.0.1:7337/api/health
+# Frontend: https://127.0.0.1:8443 (self-signed certificate)
 #
-# Build the images from the local sources instead (development). The images get
-# the tag "local", so nothing is pulled:
+# Local sources instead of the published images (they get the tag "local"):
 #   podman build -t ghcr.io/claaswenk/pontifex-backend:local  -f src/backend/Containerfile .
 #   podman build -t ghcr.io/claaswenk/pontifex-frontend:local -f src/frontend/Containerfile .
-#   PONTIFEX_TAG=local podman compose up -d        (Windows: $env:PONTIFEX_TAG='local')
-#
-# Pin an exact version instead of "latest" (set in .env):
-#   PONTIFEX_TAG=v1.0.0   or   PONTIFEX_TAG=sha-<commit>
+#   podman build -t ghcr.io/claaswenk/pontifex-database:local -f src/database/Containerfile .
+#   PONTIFEX_TAG=local podman compose up -d      (PowerShell: $env:PONTIFEX_TAG='local')
 #
 # Services:
-#   backend     Flask REST API (/api/*). The database container is not part of
-#               this stack yet; endpoints that need it answer with an error.
 #   frontend    Flask UI. Talks to the backend only.
-#   wake-relay  Sends the Wake-on-LAN packets. A UDP broadcast from the bridge
-#               network never reaches the LAN, so this one container (same image
-#               as the backend) runs in the host network. It listens on a Unix
-#               socket only, has no port, and takes nothing but a MAC address.
+#   backend     REST API. Owns no data: it asks the database and answers 503 without it.
+#   database    Owns the SQLite file. No published port, compose network only.
+#   wake-relay  Sends the Wake-on-LAN packet. A UDP broadcast from a bridge network never
+#               reaches the LAN, so this one container runs in the host network. It listens
+#               on a Unix socket only and takes nothing but a MAC address.
 #
-# TLS (mandatory, automatic):
-#   Each container generates its own self-signed certificate on first start and
-#   keeps it in a named volume. No host-side certificate files are needed.
-#   Containers run as uid 10001.
-#
-# Container-to-container trust:
-#   Not the certificate chain, but the pair secrets (BACKEND_FRONTEND_SECRET, ...)
-#   bound to the presented certificate. See src/shared/container_auth.py.
-#   Missing or too short secrets stop the container at startup.
-# =============================================================================
-
+# TLS is automatic: every container makes its own self-signed certificate on first start
+# and keeps it in a named volume. Trust between containers rests on the pair secrets
+# (BACKEND_FRONTEND_SECRET, BACKEND_DATABASE_SECRET), not on the certificates; a missing
+# or too short secret stops the container (src/shared/container_auth.py).
 services:
 
-  # ---------------------------------------------------------------------------
-  # Backend – Flask API
-  # ---------------------------------------------------------------------------
+  # Backend
   backend:
     image: ghcr.io/claaswenk/pontifex-backend:${PONTIFEX_TAG:-latest}
     container_name: pontifex-backend
@@ -55,7 +38,6 @@ services:
       INITIAL_API_KEY: ${INITIAL_API_KEY}
       # HMAC secret for signing JWT access tokens
       JWT_SECRET: ${JWT_SECRET}
-      DB_PATH: ${DB_PATH:-/app/data/pontifex.db}
       # Container-to-container secrets, one per pair. Never sent over the wire.
       BACKEND_FRONTEND_SECRET: ${BACKEND_FRONTEND_SECRET}
       BACKEND_DATABASE_SECRET: ${BACKEND_DATABASE_SECRET}
@@ -67,8 +49,8 @@ services:
     volumes:
       - tls_certs:/app/certs
       - wake_socket:/run/pontifex
-      - ./secrets/certs/backend:/run/secrets:ro
-      - sqlite_data:/app/data
+    depends_on:
+      - database
     networks:
       - pontifex-net
     healthcheck:
@@ -81,38 +63,27 @@ services:
       start_period: 10s
       retries: 3
 
-  # ---------------------------------------------------------------------------
-  # Database - Flask API for database operations
-  # ---------------------------------------------------------------------------
+  # Database
   database:
-    build:
-      context: .
-      dockerfile: src/database/Containerfile
+    image: ghcr.io/claaswenk/pontifex-database:${PONTIFEX_TAG:-latest}
     container_name: pontifex-database
     restart: unless-stopped
-    ports:
-      - "${DATABASE_PORT:-13110}:${DATABASE_PORT:-13110}"
-    env_file:
-      - secrets/database.env
+    # No published port: only the backend reaches it, over the compose network.
     environment:
-      # Server port (override via database.env or .env)
+      # Only the secret shared with the backend; no JWT secret, no frontend secret
+      BACKEND_DATABASE_SECRET: ${BACKEND_DATABASE_SECRET}
       PORT: ${DATABASE_PORT:-13110}
       # SQLite database file path (inside the container)
       DB_PATH: ${DB_PATH:-/app/data/pontifex.db}
       # Peer check interval
       PEER_CHECK_INTERVAL_SECONDS: ${PEER_CHECK_INTERVAL_SECONDS:-30}
     volumes:
-      # TLS certificates (mounted from secrets/certs/database)
-      - ./secrets/certs/database:/run/secrets:ro
-      # SQLite database persistence
+      - database_tls_certs:/app/certs
       - sqlite_data:/app/data
     networks:
       - pontifex-net
 
-  # ---------------------------------------------------------------------------
-  # Frontend - Flask UI (HTTPS, published on FRONTEND_BIND_ADDRESS:FRONTEND_PORT)
-  # Wake relay – the only container in the host network
-  # ---------------------------------------------------------------------------
+  # Wake relay: the only container in the host network
   wake-relay:
     image: ghcr.io/claaswenk/pontifex-backend:${PONTIFEX_TAG:-latest}
     container_name: pontifex-wake-relay
@@ -142,22 +113,17 @@ services:
       start_period: 5s
       retries: 3
 
-  # ---------------------------------------------------------------------------
-  # Frontend – Flask UI (HTTPS, published on FRONTEND_BIND_ADDRESS:FRONTEND_PORT)
-  # ---------------------------------------------------------------------------
+  # Frontend: published on FRONTEND_BIND_ADDRESS:FRONTEND_PORT
   frontend:
     image: ghcr.io/claaswenk/pontifex-frontend:${PONTIFEX_TAG:-latest}
     container_name: pontifex-frontend
     restart: unless-stopped
     ports:
       - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-8443}:8443"
-    env_file:
-      - secrets/frontend.env
     environment:
       # Frontend bind address and port
       FRONTEND_BIND_ADDRESS: ${FRONTEND_BIND_ADDRESS:-127.0.0.1}
       FRONTEND_PORT: ${FRONTEND_PORT:-8443}
-      # URL where the backend can be reached (for peer monitoring)
       # Only the secret shared with the backend; no JWT secret, no database secret
       BACKEND_FRONTEND_SECRET: ${BACKEND_FRONTEND_SECRET}
       # Where the frontend reaches the backend (set it too if PORT is changed)
@@ -167,7 +133,6 @@ services:
       # Extra names/IPs in the self-signed certificate (used on first start only)
       TLS_EXTRA_SANS: ${TLS_EXTRA_SANS:-}
     volumes:
-      # TLS certificates (generated on first startup by Containerfile)
       - frontend_tls_certs:/app/certs
     networks:
       - pontifex-net
@@ -181,15 +146,16 @@ services:
       start_period: 10s
       retries: 3
 
-# =============================================================================
 # Named volumes
-# =============================================================================
 volumes:
-  # SQLite database volume (shared between backend and database for simplicity)
+  # SQLite database file, owned by the database container only
   sqlite_data:
     driver: local
 
-  # TLS certificates for frontend (auto-generated on first startup)
+  # Persistent TLS certificate and private key of the database
+  database_tls_certs:
+    driver: local
+
   # Persistent TLS certificate and private key of the backend
   tls_certs:
     driver: local
@@ -202,9 +168,7 @@ volumes:
   wake_socket:
     driver: local
 
-# =============================================================================
 # Networks
-# =============================================================================
 networks:
   pontifex-net:
     driver: bridge

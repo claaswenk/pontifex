@@ -104,11 +104,16 @@ class BaseAuth:
         except jwt.PyJWTError:
             return None
 
-    def is_subject_active(self, payload: dict) -> bool:
+    SUBJECT_ACTIVE = "active"
+    SUBJECT_PASSWORD_CHANGE = "password_change"
+
+    def subject_state(self, payload: dict) -> str | None:
         """
-        Hook: may a validly signed token still be used?
+        Hook: may a validly signed token still be used? None if not, else
+        SUBJECT_ACTIVE, or SUBJECT_PASSWORD_CHANGE while the account must set its
+        own password first (only routes that allow it are open then).
         """
-        return True
+        return self.SUBJECT_ACTIVE
 
     # ------------------------------------------------------------------
     # Request helpers
@@ -131,17 +136,23 @@ class BaseAuth:
     # Checks: each returns None on success or a ready-made error response
     # ------------------------------------------------------------------
 
-    def check_access_token(self, roles: tuple[str, ...]):
+    def check_access_token(self, roles: tuple[str, ...], allow_password_change: bool = False):
         token = self.bearer_token()
         if not token:
             return jsonify({"error": "Authorization header missing or malformed."}), 401
 
         payload = self.verify_access_token(token)
-        if payload is None or not self.is_subject_active(payload):
+        state = None if payload is None else self.subject_state(payload)
+        if state is None:
             return jsonify({"error": "Unauthorized: invalid or expired access token."}), 401
 
         if payload.get("role") not in roles:
             return jsonify({"error": "Forbidden: insufficient role."}), 403
+
+        g.password_change_pending = state == self.SUBJECT_PASSWORD_CHANGE
+        if g.password_change_pending and not allow_password_change:
+            return jsonify({"error": "Password change required.",
+                            "code": "password_change_required"}), 403
 
         g.current_user = payload
         return None
@@ -154,12 +165,15 @@ class BaseAuth:
         """Only the named peer containers, proving the pair secret, may call the route."""
         return self.container.require(*peers)
 
-    def require_role(self, *roles: str):
-        """Valid user access token whose role is in ``roles``."""
+    def require_role(self, *roles: str, allow_password_change: bool = False):
+        """
+        Valid user access token whose role is in ``roles``. An account that must
+        change its password first is refused (403) unless ``allow_password_change``.
+        """
         def decorator(f):
             @wraps(f)
             def decorated(*args, **kwargs):
-                denied = self.check_access_token(roles)
+                denied = self.check_access_token(roles, allow_password_change)
                 if denied is not None:
                     return denied
                 return f(*args, **kwargs)

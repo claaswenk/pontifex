@@ -1,28 +1,23 @@
 from flask import Flask, jsonify
-from flask_cors import CORS
 
 
 def create_app():
     """Create and configure the database container Flask application."""
     app = Flask(__name__)
-    CORS(app)
 
     from app.auth import DatabaseAuth
     from app.endpoints import api_db
     from app.services import get_db_service
 
-    # Initialize authentication
     auth = DatabaseAuth()
     auth.validate_config()
     auth.init_app(app)
+    app.extensions["auth"] = auth
 
-    # Initialize database service
-    get_db_service()  # Creates the global instance
+    get_db_service()  # creates the global instance and the schema
 
-    # Register blueprints
     app.register_blueprint(api_db, url_prefix="/api")
 
-    # Error handlers
     @app.errorhandler(404)
     def not_found(_):
         return jsonify({"error": "Not found"}), 404

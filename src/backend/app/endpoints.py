@@ -7,7 +7,6 @@ from app.services import (
     LoginThrottled,
     WakeUnavailableError,
     check_devices,
-    process_pontifex_logic,
     request_wake,
     system_stats,
 )
@@ -50,7 +49,8 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
 
     @api_bp.errorhandler(InvalidInput)
     def refused_input(exc):
-        return jsonify({"error": exc.message}), 400
+        # "field" names the refused input, so a form can mark it.
+        return jsonify({"error": exc.message, "field": exc.field}), 400
 
     # -----------------------------------------------------------------------
     # Health  (public, no auth required)
@@ -122,12 +122,13 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         if result is None:
             return jsonify({"error": "Invalid username or password."}), 401
 
-        refresh_token, access_token, role = result
+        refresh_token, access_token, role, must_change = result
         return jsonify({
             "refresh_token": refresh_token,
             "access_token":  access_token,
             "expires_in":    300,
             "role":          role,
+            "must_change_password": must_change,
         }), 200
 
     # -----------------------------------------------------------------------
@@ -145,12 +146,14 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     # -----------------------------------------------------------------------
 
     @api_bp.route("/me", methods=["GET"])
-    @auth.require_role("admin", "user")
+    @auth.require_role("admin", "user", allow_password_change=True)
     def me():
         return jsonify({
             "username": g.current_user["sub"],
             "role":     g.current_user["role"],
             "token_expires_at": g.current_user["exp"],
+            "picture":  auth.database.get_user_picture_version(g.current_user["sub"]),
+            "must_change_password": g.password_change_pending,
         }), 200
 
     # -----------------------------------------------------------------------
@@ -173,16 +176,6 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
             return jsonify({"error": "Unauthorized: unknown refresh token."}), 401
 
         return jsonify({"access_token": access_token, "expires_in": 300}), 200
-
-    # -----------------------------------------------------------------------
-    # Process (existing stub - requires a valid access token)
-    # -----------------------------------------------------------------------
-
-    @api_bp.route("/process", methods=["POST"])
-    @auth.require_role("admin", "user")
-    def process_data():
-        result = process_pontifex_logic()
-        return jsonify({"success": True, "data": result}), 200
 
     # -----------------------------------------------------------------------
     # POST /api/create-user/admin
@@ -230,7 +223,8 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         try:
             auth.create_user(username, password)
         except ValueError:
-            return jsonify({"error": "Unable to create user with the provided input."}), 409
+            return jsonify({"error": "Unable to create user with the provided input.",
+                            "field": "username"}), 409
 
         return jsonify({"username": username, "role": "user"}), 201
 
@@ -319,10 +313,12 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     # -----------------------------------------------------------------------
     # PUT /api/me/password  (any signed-in user, needs the current password)
     # Revokes all refresh tokens, so a fresh pair is returned to stay signed in.
+    # The only write that is open to an account whose password the admin chose:
+    # until it is replaced, every other route answers 403 password_change_required.
     # -----------------------------------------------------------------------
 
     @api_bp.route("/me/password", methods=["PUT"])
-    @auth.require_role("admin", "user")
+    @auth.require_role("admin", "user", allow_password_change=True)
     def change_own_password():
         data = _body()
         current = _current_password(data)
@@ -339,6 +335,9 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
             response = jsonify({"error": "Too many failed attempts. Try again later."})
             response.headers["Retry-After"] = str(exc.retry_after)
             return response, 429
+        except ValueError:
+            return jsonify({"error": "The new password must differ from the temporary one.",
+                            "field": "new_password"}), 400
 
         if tokens is None:
             return jsonify({"error": "Current password is wrong."}), 403
@@ -448,15 +447,51 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         name = V.device_name(data.get("name"))
         address = V.address(data.get("address"))
         mac = V.mac(data.get("mac"))
+        image = data.get("image")
+        if image is not None:
+            V.image(image)  # refused here with the rule; the database checks the bytes again
 
         if len(auth.database.list_devices(owner)) >= MAX_DEVICES_PER_USER:
             return jsonify({"error": f"At most {MAX_DEVICES_PER_USER} devices are allowed."}), 409
 
         try:
-            device = auth.database.create_device(owner, name, address, mac)
+            device = auth.database.create_device(owner, name, address, mac, image)
         except ValueError:
-            return jsonify({"error": "You already have a device with this name."}), 409
+            return jsonify({"error": "You already have a device with this name.",
+                            "field": "name"}), 409
         return jsonify(device), 201
+
+    @api_bp.route("/devices/<int:device_id>", methods=["GET"])
+    @auth.require_role("admin", "user")
+    def get_device(device_id):
+        try:
+            device_id = V.device_id(device_id)
+        except InvalidInput:
+            return jsonify({"error": "Device not found."}), 404
+        device = auth.database.get_device(g.current_user["sub"], device_id)
+        if device is None:
+            return jsonify({"error": "Device not found."}), 404
+        return jsonify(device), 200
+
+    @api_bp.route("/devices/<int:device_id>", methods=["PUT"])
+    @auth.require_role("admin", "user")
+    def update_device(device_id):
+        try:
+            device_id = V.device_id(device_id)
+        except InvalidInput:
+            return jsonify({"error": "Device not found."}), 404
+        data = _body(required=True)
+        name = V.device_name(data.get("name"))
+        address = V.address(data.get("address"))
+        mac = V.mac(data.get("mac"))
+        try:
+            device = auth.database.update_device(g.current_user["sub"], device_id, name, address, mac)
+        except ValueError:
+            return jsonify({"error": "You already have a device with this name.",
+                            "field": "name"}), 409
+        if device is None:
+            return jsonify({"error": "Device not found."}), 404
+        return jsonify(device), 200
 
     @api_bp.route("/devices/<int:device_id>", methods=["DELETE"])
     @auth.require_role("admin", "user")
@@ -468,6 +503,72 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         if not auth.database.delete_device(g.current_user["sub"], device_id):
             return jsonify({"error": "Device not found."}), 404
         return jsonify({"id": device_id}), 200
+
+    # -----------------------------------------------------------------------
+    # Pictures: GET answers {"media_type", "image" (base64), "version"}.
+    # A device of somebody else is reported like one that does not exist.
+    # -----------------------------------------------------------------------
+
+    def _device_id_or_none(device_id):
+        try:
+            return V.device_id(device_id)
+        except InvalidInput:
+            return None
+
+    @api_bp.route("/devices/<int:device_id>/picture", methods=["GET"])
+    @auth.require_role("admin", "user")
+    def get_device_picture(device_id):
+        device_id = _device_id_or_none(device_id)
+        picture = None if device_id is None else auth.database.get_device_picture(
+            g.current_user["sub"], device_id)
+        if picture is None:
+            return jsonify({"error": "Picture not found."}), 404
+        return jsonify(picture), 200
+
+    @api_bp.route("/devices/<int:device_id>/picture", methods=["PUT"])
+    @auth.require_role("admin", "user")
+    def set_device_picture(device_id):
+        device_id = _device_id_or_none(device_id)
+        image = _body(required=True).get("image")
+        V.image(image)
+        version = None if device_id is None else auth.database.set_device_picture(
+            g.current_user["sub"], device_id, image)
+        if version is None:
+            return jsonify({"error": "Device not found."}), 404
+        return jsonify({"id": device_id, "picture": version}), 200
+
+    @api_bp.route("/devices/<int:device_id>/picture", methods=["DELETE"])
+    @auth.require_role("admin", "user")
+    def delete_device_picture(device_id):
+        device_id = _device_id_or_none(device_id)
+        if device_id is None or not auth.database.delete_device_picture(g.current_user["sub"], device_id):
+            return jsonify({"error": "Picture not found."}), 404
+        return jsonify({"id": device_id}), 200
+
+    @api_bp.route("/me/picture", methods=["GET"])
+    @auth.require_role("admin", "user")
+    def get_own_picture():
+        picture = auth.database.get_user_picture(g.current_user["sub"])
+        if picture is None:
+            return jsonify({"error": "Picture not found."}), 404
+        return jsonify(picture), 200
+
+    @api_bp.route("/me/picture", methods=["PUT"])
+    @auth.require_role("admin", "user")
+    def set_own_picture():
+        image = _body(required=True).get("image")
+        V.image(image)
+        version = auth.database.set_user_picture(g.current_user["sub"], image)
+        if version is None:
+            return jsonify({"error": "User not found."}), 404
+        return jsonify({"picture": version}), 200
+
+    @api_bp.route("/me/picture", methods=["DELETE"])
+    @auth.require_role("admin", "user")
+    def delete_own_picture():
+        if not auth.database.delete_user_picture(g.current_user["sub"]):
+            return jsonify({"error": "Picture not found."}), 404
+        return jsonify({"status": "ok"}), 200
 
     # -----------------------------------------------------------------------
     # POST /api/devices/<id>/wake

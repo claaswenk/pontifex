@@ -14,17 +14,17 @@
       <form method="post" action="{{ url_for('setup') }}" class="form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label for="setup_key">Setup key</label>
-        <input id="setup_key" name="setup_key" type="password" autocomplete="off" maxlength="512" required autofocus>
+        <input id="setup_key" name="setup_key" type="password" autocomplete="off" maxlength="512"{% if form.invalid('setup_key') %} aria-invalid="true"{% endif %} required autofocus>
         <label for="username">Administrator name</label>
-        <input id="username" name="username" type="text" autocomplete="username" maxlength="64" required>
+        <input id="username" name="username" type="text" autocomplete="username" maxlength="64" value="{{ form.value('username') }}"{% if form.invalid('username') %} aria-invalid="true"{% endif %} required>
         <div class="form-pair">
           <div>
             <label for="password">Password</label>
-            <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+            <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="1024"{% if form.invalid('password') %} aria-invalid="true"{% endif %} required>
           </div>
           <div>
             <label for="password_confirm">Repeat password</label>
-            <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+            <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="12" maxlength="1024"{% if form.invalid('password_confirm') %} aria-invalid="true"{% endif %} required>
           </div>
         </div>
         <p class="hint">Name: 3-64 characters, lower case letters, digits, '.', '_' or '-'. Password: at least 12 characters.</p>

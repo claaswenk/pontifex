@@ -44,7 +44,9 @@ curl -k -X POST https://localhost:7337/api/login \
   }'
 ```
 
-Response: `{"refresh_token": "...", "access_token": "...", "expires_in": 300, "role": "admin"}`
+Response: `{"refresh_token": "...", "access_token": "...", "expires_in": 300, "role": "admin", "must_change_password": false}`
+
+`must_change_password` is `true` for a user whose password the admin chose (steps 9 and 10). See step 7.
 
 Wrong password and unknown user both answer `401 {"error": "Invalid username or password."}`.
 After 5 failed attempts for one user from one address, or 30 from one address, the answer is `429` with a
@@ -74,7 +76,7 @@ curl -k -X GET https://localhost:7337/api/me \
   -H "Authorization: Bearer <>"
 ```
 
-Response: `{"username": "anna", "role": "user", "token_expires_at": 1760000000}`
+Response: `{"username": "anna", "role": "user", "token_expires_at": 1760000000, "picture": null, "must_change_password": false}`. `picture` is the version of the profile picture, `null` without one (see 14b).
 
 7. Change my own password (admin and user; returns a fresh token pair, all other sessions end)
 ```
@@ -88,6 +90,11 @@ curl -k -X PUT https://localhost:7337/api/me/password \
 ```
 
 A wrong current password answers `403`. Wrong guesses count against the same limit as the login (`429`).
+
+A user whose password the admin chose (a new user, or after step 10) has to replace it first. Until then the account can only
+call steps 3 to 7. Every other call answers
+`403 {"error": "Password change required.", "code": "password_change_required"}`. The new password must differ from the
+temporary one (`400`, `"field": "new_password"`). The admin account, and a user who set the password through a reset token (step 10b), are never asked.
 
 ---
 
@@ -112,9 +119,9 @@ curl -k -X POST https://localhost:7337/api/users \
   }'
 ```
 
-`409` if the name is taken.
+`409` if the name is taken. The user has to choose their own password at the first sign-in (step 7).
 
-10. Set a new password for a user (ends all their sessions; not for yourself, use step 7)
+10. Set a new password for a user (ends all their sessions and asks them to replace it at the next sign-in; not for yourself, use step 7)
 ```
 curl -k -X PUT https://localhost:7337/api/users/<username> \
   -H "Authorization: Bearer <admin token>" \
@@ -147,8 +154,6 @@ Response `200`: `{"status": "ok"}`. All sessions of the user end; they log in ag
 `401` for an unknown, used or expired token, `400` for an invalid password (the token stays valid).
 Wrong tokens count per address: after 5 failures `429` (15 minutes). Changing the password, renaming or deleting the user also voids a pending token.
 
-
-
 11. Delete a user (with their devices and sessions; not yourself, not the admin account: `409`)
 ```
 curl -k -X DELETE https://localhost:7337/api/users/<username> \
@@ -171,7 +176,6 @@ Response: `{"username": "<new name>", "role": "user", "refresh_token": "...", "a
 - `409` if the name is taken or is already yours, `400` for an invalid name or any field other than `username` and `current_password`.
 - `403` if the password is wrong (counts against the login limit, `429` when exceeded) or if `role` is sent.
 - Devices, password and role stay with the account.
-
 
 11a. Delete my own account (with my devices and sessions; needs the current password; the admin account cannot be deleted: `409`)
 ```
@@ -197,7 +201,7 @@ curl -k -X GET https://localhost:7337/api/devices \
   -H "Authorization: Bearer <>"
 ```
 
-Response: `{"devices": [{"id": 1, "name": "ryzen", "address": "192.168.178.50", "mac": "a8:a1:59:29:3d:6d"}]}`
+Response: `{"devices": [{"id": 1, "name": "ryzen", "address": "192.168.178.50", "mac": "a8:a1:59:29:3d:6d", "picture": null}]}`. `picture` is the version of the device picture, `null` without one.
 
 13. Add a device
 ```
@@ -214,12 +218,52 @@ curl -k -X POST https://localhost:7337/api/devices \
 - `name`: 1-64 characters, unique per user (`409` otherwise). At most 100 devices per user.
 - `address`: host name or IP. Loopback, link-local, multicast and unspecified addresses are refused.
 - `mac`: six hex pairs with `:`, `-`, `.` or without separators; stored as `aa:bb:cc:dd:ee:ff`. Broadcast, all-zero and multicast MACs are refused.
+- `image` (optional): a picture, see 14b.
+- A refused value answers with the name of the field: `{"error": "...", "field": "mac"}` (`409` for a taken name: `"field": "name"`).
+
+13a. Get one device
+```
+curl -k -X GET https://localhost:7337/api/devices/<id> \
+  -H "Authorization: Bearer <>"
+```
+
+13b. Edit a device (name, address and MAC, all three are sent; the picture stays)
+```
+curl -k -X PUT https://localhost:7337/api/devices/<id> \
+  -H "Authorization: Bearer <>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "ryzen",
+    "address": "192.168.178.51",
+    "mac": "A8:A1:59:29:3D:6D"
+  }'
+```
+
+The same rules as in 13. `409` if the user has another device of that name (keeping the own name is fine).
 
 14. Delete a device
 ```
 curl -k -X DELETE https://localhost:7337/api/devices/<id> \
   -H "Authorization: Bearer <>"
 ```
+
+14a. Device picture: set, get, remove
+```
+curl -k -X PUT https://localhost:7337/api/devices/<id>/picture \
+  -H "Authorization: Bearer <>" \
+  -H "Content-Type: application/json" \
+  -d '{"image": "<base64>"}'
+curl -k -X GET    https://localhost:7337/api/devices/<id>/picture -H "Authorization: Bearer <>"
+curl -k -X DELETE https://localhost:7337/api/devices/<id>/picture -H "Authorization: Bearer <>"
+```
+
+`GET` answers `{"media_type": "image/png", "image": "<base64>", "version": 3}`, `PUT` answers `{"id": 1, "picture": 4}`. The version changes with
+every new picture, so a browser can cache by it. `404` if there is no picture or the device is not yours.
+
+14b. Profile picture: the same three calls on `/api/me/picture` (`PUT` answers `{"picture": 4}`, `DELETE` answers `{"status": "ok"}`).
+
+A picture is PNG, JPEG or WebP, at most 200 KB, sent as base64 text. The type is detected from the bytes, never taken from the sender; SVG and
+everything else is refused with `400`.
 
 15. Wake a device (Wake-on-LAN)
 ```
@@ -254,26 +298,14 @@ curl -k -X GET https://localhost:7337/api/metrics \
   -H "Authorization: Bearer <>"
 ```
 
-Response: `{"devices": [{"id": 1, "name": "nas", "address": "192.168.1.10", "status": "online", "latency_ms": 3.2}], "summary": {"total": 1, "online": 1, "offline": 0}}`
+Response: `{"devices": [{"id": 1, "name": "nas", "address": "192.168.1.10", "mac": "aa:bb:cc:dd:ee:01", "status": "online", "latency_ms": 3.2, "picture": null}], "summary": {"total": 1, "online": 1, "offline": 0}}`
 
 `status` is `online` or `offline`, so a UI can show a green or red dot. The device list comes from the database; addresses cannot be passed in the request. A device is online if one of TCP ports 22, 80, 443, 445 or 3389 answers (ICMP ping needs privileges the container does not have). Loopback, link-local and multicast targets are never probed.
 
 ---
 
-## Other
-
-18. Execute process (placeholder)
-```
-curl -k -X POST https://localhost:7337/api/process \
-  -H "Authorization: Bearer <>"
-```
-
-## Not available yet
-
-The database container is not part of the stack yet. Only call 1 works without it. Every other call needs it
-(to check tokens, passwords or devices) and answers `503` until it exists.
-
 ## Removed
 
 - `PUT /api/devices/wol` (free `ip` and `port` in the request): replaced by call 15.
 - `POST /api/create-user/user` (replaced the admin): replaced by calls 8-11.
+- `POST /api/process` (placeholder without function).

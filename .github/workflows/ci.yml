@@ -222,6 +222,9 @@ jobs:
           - service: frontend
             port: 8443
             health_path: /health
+          - service: database
+            port: 13110
+            health_path: /api/health
     env:
       IMAGE_NAME: pontifex-${{ matrix.service }}
       IMAGE_TAR: pontifex-${{ matrix.service }}-image.tar
@@ -354,7 +357,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # Publish: only from main or a version tag, only after every gate passed,
   # and only the images that were built and tested above.
-  # Result: ghcr.io/<owner>/pontifex-backend and ghcr.io/<owner>/pontifex-frontend
+  # Result: ghcr.io/<owner>/pontifex-backend, -frontend and -database
   # ---------------------------------------------------------------------------
   publish:
     name: Publish ${{ matrix.service }} image to GHCR
@@ -370,7 +373,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [backend, frontend]
+        service: [backend, frontend, database]
     env:
       IMAGE_NAME: pontifex-${{ matrix.service }}
       IMAGE_TAR: pontifex-${{ matrix.service }}-image.tar
@@ -437,7 +440,7 @@ jobs:
           retention-days: 1
 
   # ---------------------------------------------------------------------------
-  # GitHub Release: only for version tags, only after both images are
+  # GitHub Release: only for version tags, only after all images are
   # published. Write access to repository contents is limited to this job.
   # The notes list the PRs since the previous release plus the image digests.
   # ---------------------------------------------------------------------------
@@ -466,7 +469,7 @@ jobs:
             echo "Pin these digests for a reproducible deployment:"
             echo
             echo '```'
-            cat digest-backend.txt digest-frontend.txt
+            cat digest-backend.txt digest-frontend.txt digest-database.txt
             echo '```'
             echo
             echo "Deploy: set \`PONTIFEX_TAG=${TAG}\` in \`.env\`, then \`podman compose pull && podman compose up -d\`."

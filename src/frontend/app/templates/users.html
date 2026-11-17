@@ -58,15 +58,15 @@
 
 <section class="panel spaced" aria-labelledby="add-user-title">
   <h2 id="add-user-title">Add a user</h2>
-  <form method="post" action="{{ url_for('add_user') }}" class="form form--row">
+  <form method="post" action="{{ url_for('add_user') }}" class="form form--row" data-enhance>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div>
       <label for="username">Username</label>
-      <input id="username" name="username" type="text" autocomplete="off" maxlength="64" required>
+      <input id="username" name="username" type="text" autocomplete="off" maxlength="64" value="{{ form.value('username') }}"{% if form.invalid('username') %} aria-invalid="true"{% endif %} required>
     </div>
     <div>
       <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+      <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="1024"{% if form.invalid('password') %} aria-invalid="true"{% endif %} required>
     </div>
     <button type="submit" class="button">Add user</button>
   </form>
