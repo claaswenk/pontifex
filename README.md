@@ -127,10 +127,11 @@ Defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Every gate be
 | `secrets-and-lint` | Gitleaks over the full history, Hadolint |
 | `sast` | Bandit, severity MEDIUM or higher |
 | `dependency-audit` | `pip-audit`, any known vulnerability |
-| `build` | Per service (backend, frontend, database): Podman build, SBOM (CycloneDX), Trivy HIGH/CRITICAL, non-root check, smoke test without a mounted certificate (as in a real deployment), healthcheck |
+| `build` | Per service (backend, frontend, database): Podman build, SBOM (CycloneDX), Trivy HIGH/CRITICAL, non-root check, smoke test without a mounted certificate (as in a real deployment), healthcheck. Not run for version tags |
 | `dast` | OWASP ZAP baseline against the backend. Manual run or `test/dast-**` branches only |
-| `publish` | Push all three images to GHCR from `main` or a `v*` tag, after `build` passes. Pushes the tested images without rebuilding. For tags it first checks the format (`v1.2.3`) and that the commit is on `main` |
-| `release` | Only for `v*` tags, after `publish`: creates the GitHub Release with generated notes and the image digests. The only job with write access to repository contents |
+| `publish` | Only on `main`, after `build` passes: pushes the tested images to GHCR as `sha-<commit>` and `latest`, without rebuilding |
+| `promote` | Only for `v*` tags: checks the format (`v1.2.3`) and that the commit is on `main`, then adds the version tag to the `sha-<commit>` image that `main` already published. Nothing is rebuilt, so the version has the same digest as that image |
+| `release` | Only for `v*` tags, after `promote`: creates the GitHub Release with generated notes and the image digests. The only job with write access to repository contents |
 
 Reports are uploaded as workflow artifacts: `sast-report`, `dependency-audit-report`, `sbom-<service>`, `container-image-<service>` and `dast-report`.
 
@@ -150,7 +151,7 @@ podman pull ghcr.io/claaswenk/pontifex-database:sha-<commit>
 
 ## Releases
 
-Merging to `main` publishes `latest` and `sha-<commit>`. A **release** is a deliberate decision on top of that: you tag a commit on `main`, and the pipeline publishes the images under that version and creates the GitHub Release.
+Merging to `main` builds the images once and publishes `latest` and `sha-<commit>`. A **release** is a deliberate decision on top of that: you tag a commit on `main`, and the pipeline gives the already published image of that commit the version tag and creates the GitHub Release.
 
 | Tag | Moves? | Use for |
 |---|---|---|
@@ -162,7 +163,7 @@ Versions follow `vMAJOR.MINOR.PATCH`: `PATCH` for fixes, `MINOR` for new feature
 
 ### How to release
 
-1. Merge `dev` into `main` with a pull request and wait until the CI on `main` is green.
+1. Merge `dev` into `main` with a pull request and wait until the CI on `main` is green, including `publish`. The tag run needs the `sha-<commit>` image from that run and fails without it.
 2. Deploy `latest` somewhere and check that it starts (see [Quick start](#quick-start-linux-podman)).
 3. Tag that commit on `main` and push the tag:
 
@@ -172,7 +173,7 @@ Versions follow `vMAJOR.MINOR.PATCH`: `PATCH` for fixes, `MINOR` for new feature
    git push origin v0.1.0
    ```
 
-4. Watch the run for the tag under **Actions**. It builds and scans all three images again, checks the tag, publishes `pontifex-backend:v0.1.0`, `pontifex-frontend:v0.1.0` and `pontifex-database:v0.1.0`, and creates the release.
+4. Watch the run for the tag under **Actions**. It checks the tag, adds `v0.1.0` to `pontifex-backend`, `pontifex-frontend` and `pontifex-database`, and creates the release. It takes seconds because nothing is rebuilt. A version tag that already exists with another digest is refused.
 5. On the server set `PONTIFEX_TAG=v0.1.0` in `.env`, then:
 
    ```bash
@@ -187,7 +188,7 @@ Versions follow `vMAJOR.MINOR.PATCH`: `PATCH` for fixes, `MINOR` for new feature
 > [!IMPORTANT]
 > Push the tag only. Do not create the release by hand in the GitHub web UI: that creates the tag as a side effect and the pipeline then finds the release already present and leaves it unchanged, without the image digests in the notes.
 
-If the pipeline rejects the tag (wrong format, or the commit is not on `main`), nothing is published. Delete the tag and tag again:
+If the pipeline rejects the tag (wrong format, the commit is not on `main`, or no `sha-<commit>` image exists yet), nothing is published. Delete the tag and tag again:
 
 ```bash
 git push --delete origin v0.1.0
