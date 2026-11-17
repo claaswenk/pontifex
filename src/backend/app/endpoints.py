@@ -62,12 +62,12 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         return jsonify({"status": "healthy", "service": "pontifex-backend"}), 200
 
     # -----------------------------------------------------------------------
-    # GET /api/internal/ping  (frontend only: mutual container authentication)
+    # GET /api/internal/ping  (frontend and database: mutual container authentication)
     # Not part of the public API. Outsiders get a bare 401 without any proof.
     # -----------------------------------------------------------------------
 
     @api_bp.route("/internal/ping", methods=["GET"])
-    @auth.require_container("frontend")
+    @auth.require_container("frontend", "database")
     def internal_ping():
         return jsonify({"status": "ok", "service": "pontifex-backend"}), 200
 

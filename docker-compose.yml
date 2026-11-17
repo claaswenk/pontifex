@@ -80,6 +80,8 @@ services:
     environment:
       # Only the secret shared with the backend; no JWT secret, no frontend secret
       BACKEND_DATABASE_SECRET: ${BACKEND_DATABASE_SECRET}
+      # Where the database reaches the backend
+      BACKEND_URL: ${BACKEND_URL:-https://backend:7337}
       PORT: ${DATABASE_PORT:-13110}
       # SQLite database file path (inside the container)
       DB_PATH: ${DB_PATH:-/app/data/pontifex.db}

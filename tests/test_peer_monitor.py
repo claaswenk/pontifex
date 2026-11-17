@@ -49,9 +49,10 @@ class TwoContainersTest(unittest.TestCase):
             proc.wait(timeout=10)
         self.tmp.cleanup()
 
-    def start(self, name: str, subdir: str, port: int, peer_env: str, peer_port: int, secret: str):
+    def start(self, name: str, subdir: str, port: int, peer_env: str, peer_port: int, secret: str,
+              database_secret: str = "d" * 40):
         cert, key = make_cert(self.tmp.name, name)
-        log_path = os.path.join(self.tmp.name, f"{name}.log")
+        log_path = os.path.join(self.tmp.name, f"{name}_{port}.log")
         env = {
             "PATH": os.environ["PATH"],
             "PYTHONPATH": os.path.join(ROOT, "src"),
@@ -59,7 +60,8 @@ class TwoContainersTest(unittest.TestCase):
             "TLS_CERT_PATH": cert,
             "TLS_KEY_PATH": key,
             "BACKEND_FRONTEND_SECRET": secret,
-            "BACKEND_DATABASE_SECRET": "d" * 40,
+            "BACKEND_DATABASE_SECRET": database_secret,
+            "DB_PATH": os.path.join(self.tmp.name, f"{name}.db"),
             "JWT_SECRET": "j" * 40,
             "INITIAL_API_KEY": "initial-key",
             peer_env: f"https://127.0.0.1:{peer_port}",
@@ -106,6 +108,30 @@ class TwoContainersTest(unittest.TestCase):
         for path in (backend, frontend):
             with open(path, encoding="utf-8") as fh:
                 self.assertNotIn("mutual authentication OK", fh.read())
+
+    def test_backend_and_database_authenticate_each_other(self):
+        database_port = free_port()
+        backend = self.start("backend", "backend", self.backend_port, "DATABASE_URL",
+                             database_port, SECRET, database_secret=SECRET)
+        database = self.start("database", "database", database_port, "BACKEND_URL",
+                              self.backend_port, SECRET, database_secret=SECRET)
+
+        self.assertTrue(self.log_has(backend, "Peer database: mutual authentication OK"),
+                        "backend did not authenticate the database")
+        self.assertTrue(self.log_has(database, "Peer backend: mutual authentication OK"),
+                        "database did not authenticate the backend")
+
+    def test_backend_and_database_different_secrets_fail_on_both_sides(self):
+        database_port = free_port()
+        backend = self.start("backend", "backend", self.backend_port, "DATABASE_URL",
+                             database_port, SECRET, database_secret=SECRET)
+        database = self.start("database", "database", database_port, "BACKEND_URL",
+                              self.backend_port, SECRET, database_secret="x" * 40)
+
+        self.assertTrue(self.log_has(backend, "Peer database: auth_failed"),
+                        "backend accepted a database with a different secret")
+        self.assertTrue(self.log_has(database, "Peer backend: auth_failed"),
+                        "database accepted a backend with a different secret")
 
     def test_container_starts_without_peer_url(self):
         env_less = self.start("frontend", "frontend", self.frontend_port, "UNUSED_URL",
