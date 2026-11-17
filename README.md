@@ -11,6 +11,10 @@
   <img src="assets/pontifex_logo_small.png" alt="Pontifex Owl" width="260">
 </p>
 
+> [!IMPORTANT]
+> Selected areas of specialization for the Security by Design lecture:
+> "1. Building von Artefakten" & "3. Build & Supply Chain".
+
 ## Quick start (Linux, Podman)
 
 ```bash
