@@ -100,6 +100,10 @@ def _tokens(data: dict) -> tuple[str, str, int] | None:
 
 
 def register_pages(app, sessions, backend) -> None:
+    from app.services import FrontendLoginThrottle
+
+    login_throttle = FrontendLoginThrottle()
+
     # ------------------------------------------------------------------
     # Session, CSRF, cookie
     # ------------------------------------------------------------------
@@ -323,16 +327,23 @@ def register_pages(app, sessions, backend) -> None:
             ensure_session()
             return render_template("login.html", active=None)
 
+        client_ip = request.remote_addr or "unknown"
+        if not login_throttle.check(client_ip):
+            flash("error", "Too many failed attempts. Try again later.")
+            return redirect(url_for("login"), 303)
+
         try:
             username = _field("username", 64, strip=True)
             password = _field("password", 1024)
         except InvalidInput:  # cannot be a real account: answered like a wrong password
+            login_throttle.failure(client_ip)
             flash("error", "Invalid username or password.")
             return redirect(url_for("login"), 303)
         status, data = backend.call("POST", "/api/login", {"username": username, "password": password})
         tokens = _tokens(data) if status == 200 else None
         role = data.get("role")
         if tokens is not None and role in ("admin", "user"):
+            login_throttle.success(client_ip)
             # A new session id after signing in: an id planted before the login is useless.
             g.session = sessions.promote(
                 g.session, username.lower(), role, tokens[0], tokens[1], tokens[2]
@@ -345,8 +356,10 @@ def register_pages(app, sessions, backend) -> None:
             load_picture()
             return redirect(url_for("devices"), 303)
         if status == 429:
+            login_throttle.failure(client_ip)
             flash("error", "Too many failed attempts. Try again later.")
         elif status == 401:
+            login_throttle.failure(client_ip)
             flash("error", "Invalid username or password.")
         else:
             flash("error", "Sign-in is temporarily unavailable. Try again later.")
