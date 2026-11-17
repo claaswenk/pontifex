@@ -19,10 +19,43 @@ log = logging.getLogger(__name__)
 
 IDLE_TIMEOUT_SECONDS = 30 * 60
 ABSOLUTE_TIMEOUT_SECONDS = 12 * 60 * 60
-MAX_SESSIONS = 1000
+MAX_SESSIONS = int(os.environ.get("MAX_SESSIONS", "5000"))
 # An access token that expires within this time is renewed before it is used.
 ACCESS_TOKEN_MARGIN_SECONDS = 30
 BACKEND_TIMEOUT_SECONDS = 15
+
+
+class FrontendLoginThrottle:
+    WINDOW_SECONDS = 900
+    MAX_PER_CLIENT = 5
+
+    def __init__(self, clock=time.monotonic) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._failures: dict[str, list[float]] = {}
+
+    def _recent(self, client: str, now: float) -> list[float]:
+        stamps = [t for t in self._failures.get(client, ()) if now - t < self.WINDOW_SECONDS]
+        if stamps:
+            self._failures[client] = stamps
+        else:
+            self._failures.pop(client, None)
+        return stamps
+
+    def check(self, client: str) -> bool:
+        """Returns True if allowed, False if throttled."""
+        with self._lock:
+            now = self._clock()
+            return len(self._recent(client, now)) < self.MAX_PER_CLIENT
+
+    def failure(self, client: str) -> None:
+        with self._lock:
+            now = self._clock()
+            self._failures.setdefault(client, []).append(now)
+
+    def success(self, client: str) -> None:
+        with self._lock:
+            self._failures.pop(client, None)
 
 
 class BackendUnavailable(Exception):

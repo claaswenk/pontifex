@@ -37,6 +37,7 @@ class BaseAuth:
     JWT_SECRET_ENV = "JWT_SECRET"
     JWT_ALGORITHM = "HS256"
     ACCESS_TOKEN_TTL = datetime.timedelta(minutes=5)
+    MIN_JWT_SECRET_LENGTH = 32
 
     # Overridden by every container.
     CONTAINER_ID = ""
@@ -52,12 +53,14 @@ class BaseAuth:
     # ------------------------------------------------------------------
 
     def validate_config(self) -> None:
-        """Fail fast at startup if a required env variable is missing."""
+        """Fail fast at startup if a required env variable is missing or insecure."""
         missing: List[str] = [name for name in self.REQUIRED_ENV if not os.environ.get(name)]
         if missing:
             raise RuntimeError(
                 "Missing required environment variables: " + ", ".join(missing)
             )
+        if self.JWT_SECRET_ENV in self.REQUIRED_ENV:
+            self._jwt_secret()
         self.container.validate_config()
 
     def init_app(self, app) -> None:
@@ -68,6 +71,10 @@ class BaseAuth:
         secret = os.environ.get(self.JWT_SECRET_ENV, "")
         if not secret:
             raise RuntimeError(f"{self.JWT_SECRET_ENV} environment variable is not set")
+        if len(secret) < self.MIN_JWT_SECRET_LENGTH:
+            raise RuntimeError(
+                f"{self.JWT_SECRET_ENV} must be at least {self.MIN_JWT_SECRET_LENGTH} characters"
+            )
         return secret
 
     # ------------------------------------------------------------------
