@@ -11,7 +11,8 @@ from shared.auth import BaseAuth
 class DatabaseAuth(BaseAuth):
     CONTAINER_ID = "database"
     PEERS = ("backend",)
-    REQUIRED_ENV = (BaseAuth.JWT_SECRET_ENV,)
+    # No user sessions here, so no JWT secret: only the container pair secret.
+    REQUIRED_ENV = ()
 
     def init_app(self, app) -> None:
         """Attach container-level response signing to a Flask app."""

@@ -55,11 +55,15 @@ class BackendAuth(BaseAuth):
         return refresh_token, self.issue_access_token(username, "admin")
 
     def create_user(self, username: str, password: str) -> None:
-        """Add a regular user. The only admin is the bootstrap admin."""
-        self.database.create_user(username, self.hash_password(password), "user")
+        """
+        Add a regular user. The only admin is the bootstrap admin. The admin chose
+        the password, so the user has to replace it at the first sign-in.
+        """
+        self.database.create_user(username, self.hash_password(password), "user", must_change=True)
 
     def set_password(self, username: str, password: str) -> bool:
-        return self.database.set_password(username, self.hash_password(password))
+        """The admin sets a password for somebody else: the user has to replace it."""
+        return self.database.set_password(username, self.hash_password(password), must_change=True)
 
     def change_own_password(
         self, username: str, current: str, new: str, address: str
@@ -70,6 +74,8 @@ class BackendAuth(BaseAuth):
 
         Wrong guesses count against the same limit as the login, so a stolen
         access token cannot be used to guess the password.
+        Raises ValueError if the account must change its password and the new
+        one is the old one again.
         """
         self.throttle.check(username, address)
 
@@ -79,6 +85,8 @@ class BackendAuth(BaseAuth):
             return None
 
         self.throttle.success(username, address)
+        if credentials["must_change"] and new == current:
+            raise ValueError("same password")
         # Revokes every refresh token of the user, on all devices.
         self.database.set_password(username, self.hash_password(new))
         refresh_token = self.database.create_refresh_token(username)
@@ -161,10 +169,10 @@ class BackendAuth(BaseAuth):
         self.throttle.success(username, address)
         return self.database.delete_user(username)
 
-    def login(self, username: str, password: str, address: str) -> tuple[str, str, str] | None:
+    def login(self, username: str, password: str, address: str) -> tuple[str, str, str, bool] | None:
         """
-        Check a username and password. Returns (refresh_token, access_token, role),
-        or None for every kind of failure (unknown user, wrong password).
+        Check a username and password. Returns (refresh_token, access_token, role,
+        must_change), or None for every kind of failure (unknown user, wrong password).
 
         Raises LoginThrottled when too many attempts failed recently.
         """
@@ -181,7 +189,7 @@ class BackendAuth(BaseAuth):
         self.throttle.success(username, address)
         refresh_token = self.database.create_refresh_token(credentials["username"])
         access_token = self.issue_access_token(credentials["username"], credentials["role"])
-        return refresh_token, access_token, credentials["role"]
+        return refresh_token, access_token, credentials["role"], credentials["must_change"]
 
     def logout(self, refresh_token: str) -> None:
         self.database.revoke_refresh_token(refresh_token)
@@ -193,9 +201,15 @@ class BackendAuth(BaseAuth):
         username, role = found
         return self.issue_access_token(username, role)
 
-    def is_subject_active(self, payload: dict) -> bool:
-        """A revoked admin loses access immediately, not after the token expires."""
-        return self.database.exists(payload.get("sub", ""))
+    def subject_state(self, payload: dict) -> str | None:
+        """
+        Asked on every request, so a deleted account loses access immediately and a
+        password set by the admin keeps the user out of everything but the password change.
+        """
+        credentials = self.database.get_credentials(payload.get("sub", ""))
+        if credentials is None:
+            return None
+        return self.SUBJECT_PASSWORD_CHANGE if credentials["must_change"] else self.SUBJECT_ACTIVE
 
     # ------------------------------------------------------------------
     # One-time bootstrap protection

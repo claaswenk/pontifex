@@ -30,8 +30,12 @@ class UserManagementTest(unittest.TestCase):
         ).get_json()
         self.admin = {"Authorization": f"Bearer {admin['access_token']}"}
 
-    def _add(self, name="anna", password=PW):
-        return self.client.post("/api/users", json={"username": name, "password": password}, headers=self.admin)
+    def _add(self, name="anna", password=PW, settled=True):
+        """Create a user. ``settled``: as if they had already replaced the admin's password."""
+        r = self.client.post("/api/users", json={"username": name, "password": password}, headers=self.admin)
+        if settled and r.status_code == 201:
+            self.db.settle(r.get_json()["username"])
+        return r
 
     def _user_headers(self, name="anna", password=PW):
         token = self.client.post("/api/login", json={"username": name, "password": password}).get_json()
@@ -172,6 +176,73 @@ class UserManagementTest(unittest.TestCase):
         self.assertEqual(self.client.put("/api/me/password", json=body, headers=headers).status_code, 429)
         right = {"current_password": PW, "new_password": PW2}
         self.assertEqual(self.client.put("/api/me/password", json=right, headers=headers).status_code, 429)
+
+    # -- a password the admin chose has to be replaced -------------------------------
+
+    def _fresh_user(self, name="anna"):
+        """A user the admin just created: has not chosen a password yet. Returns (login answer, headers)."""
+        self._add(name, settled=False)
+        login = self.client.post("/api/login", json={"username": name, "password": PW}).get_json()
+        return login, {"Authorization": f"Bearer {login['access_token']}"}
+
+    def test_a_new_user_is_told_to_change_the_password(self):
+        login, headers = self._fresh_user()
+        self.assertTrue(login["must_change_password"])
+        self.assertTrue(self.client.get("/api/me", headers=headers).get_json()["must_change_password"])
+
+    def test_the_admin_and_settled_users_are_not(self):
+        self.assertFalse(self.client.get("/api/me", headers=self.admin).get_json()["must_change_password"])
+        self._add()
+        login = self.client.post("/api/login", json={"username": "anna", "password": PW}).get_json()
+        self.assertFalse(login["must_change_password"])
+
+    def test_until_then_everything_but_the_password_change_is_closed(self):
+        _, headers = self._fresh_user()
+        for method, path in (
+            ("get", "/api/devices"), ("get", "/api/metrics"), ("get", "/api/monitoring"),
+            ("post", "/api/devices"), ("post", "/api/devices/1/wake"), ("get", "/api/me/picture"),
+            ("patch", "/api/me"), ("delete", "/api/me"),
+        ):
+            with self.subTest(path=path, method=method):
+                r = getattr(self.client, method)(path, json={}, headers=headers)
+                self.assertEqual(r.status_code, 403)
+                self.assertEqual(r.get_json()["code"], "password_change_required")
+
+    def test_the_password_change_opens_everything(self):
+        login, headers = self._fresh_user()
+        r = self.client.put("/api/me/password", json={"current_password": PW, "new_password": PW2}, headers=headers)
+        self.assertEqual(r.status_code, 200)
+        fresh = {"Authorization": f"Bearer {r.get_json()['access_token']}"}
+        self.assertEqual(self.client.get("/api/devices", headers=fresh).status_code, 200)
+        self.assertFalse(self.client.get("/api/me", headers=fresh).get_json()["must_change_password"])
+        self.assertFalse(
+            self.client.post("/api/login", json={"username": "anna", "password": PW2}).get_json()["must_change_password"])
+
+    def test_the_temporary_password_cannot_be_kept(self):
+        _, headers = self._fresh_user()
+        r = self.client.put("/api/me/password", json={"current_password": PW, "new_password": PW}, headers=headers)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["field"], "new_password")
+        self.assertEqual(self.client.get("/api/devices", headers=headers).status_code, 403)
+
+    def test_a_password_the_admin_sets_has_to_be_replaced_again(self):
+        self._add()
+        self.client.put("/api/users/anna", json={"password": PW2}, headers=self.admin)
+        login = self.client.post("/api/login", json={"username": "anna", "password": PW2}).get_json()
+        self.assertTrue(login["must_change_password"])
+        self.assertEqual(
+            self.client.get("/api/devices", headers={"Authorization": f"Bearer {login['access_token']}"}).status_code, 403)
+
+    def test_a_reset_token_is_the_users_own_choice(self):
+        self._fresh_user()
+        token = self._issue().get_json()["reset_token"]
+        self.assertEqual(self._redeem(token).status_code, 200)
+        login = self.client.post("/api/login", json={"username": "anna", "password": PW2}).get_json()
+        self.assertFalse(login["must_change_password"])
+
+    def test_the_refresh_token_still_works_so_the_session_can_carry_on(self):
+        login, _ = self._fresh_user()
+        self.assertEqual(self.client.post("/api/token", json={"refresh_token": login["refresh_token"]}).status_code, 200)
 
     # -- forgot password (admin issues a token, user redeems it) --------------------
 

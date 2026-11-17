@@ -1,5 +1,7 @@
 """
-Unit tests for DatabaseService.
+Unit tests for DatabaseService (the SQLite layer of the database container).
+
+The same code is also exercised over TLS by tests/test_database_client.py.
 
 Run with:
     python -m unittest tests.test_database_services -v
@@ -12,15 +14,13 @@ import sys
 import tempfile
 import unittest
 
-# Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src', 'database', 'app'))
 
 from services import DatabaseService  # noqa: E402
 
+HASH = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$aGFzaGhhc2hoYXNoaGFzaA"
+PNG = ("image/png", b"\x89PNG\r\n\x1a\n" + b"x" * 20)
 
-# =============================================================================
-# Base test case
-# =============================================================================
 
 class DatabaseTestCase(unittest.TestCase):
     """Gives every test a DatabaseService on a fresh temporary database."""
@@ -29,314 +29,134 @@ class DatabaseTestCase(unittest.TestCase):
         self._tmpdir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self._tmpdir, ignore_errors=True)
         self.temp_db_path = os.path.join(self._tmpdir, "test.db")
-        self.db_service = DatabaseService(db_path=self.temp_db_path)
+        self.db = DatabaseService(db_path=self.temp_db_path)
+
+    def rows(self, query, params=()):
+        with sqlite3.connect(self.temp_db_path) as conn:
+            return conn.execute(query, params).fetchall()
 
 
-# =============================================================================
-# User Tests
-# =============================================================================
+class TestAccounts(DatabaseTestCase):
+    def test_a_user_can_be_added_once(self):
+        self.db.add_user("anna", HASH)
+        self.assertEqual(self.db.get_credentials("anna"),
+                         {"username": "anna", "pw_hash": HASH, "role": "user", "must_change": False})
+        with self.assertRaises(ValueError):
+            self.db.add_user("anna", HASH)
 
-class TestUserOperations(DatabaseTestCase):
-    """Tests for user-related operations."""
+    def test_a_password_set_by_somebody_else_has_to_be_replaced(self):
+        self.db.add_user("anna", HASH, must_change=True)
+        self.assertTrue(self.db.get_credentials("anna")["must_change"])
+        self.db.set_password("anna", HASH + "x")  # her own choice
+        self.assertFalse(self.db.get_credentials("anna")["must_change"])
+        self.db.set_password("anna", HASH + "y", must_change=True)  # the admin again
+        self.assertTrue(self.db.get_credentials("anna")["must_change"])
 
-    def test_create_admin(self):
-        """Test creating an admin user."""
-        user_id, username = self.db_service.create_admin("admin", "password123")
+    def test_a_reset_token_is_the_users_own_choice(self):
+        self.db.add_user("anna", HASH, must_change=True)
+        self.db.create_reset_token("anna", "r" * 64, 2**33)
+        self.assertTrue(self.db.reset_password_with_token("r" * 64, HASH + "z"))
+        self.assertFalse(self.db.get_credentials("anna")["must_change"])
 
-        self.assertEqual(user_id, 1)
-        self.assertEqual(username, "admin")
+    def test_a_database_from_before_the_flag_gets_the_column(self):
+        path = os.path.join(self._tmpdir, "old.db")
+        with sqlite3.connect(path) as conn:
+            conn.execute('CREATE TABLE users (user_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, '
+                         'username TEXT NOT NULL UNIQUE, password TEXT NOT NULL, '
+                         'is_admin INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
+            conn.execute("INSERT INTO users (username, password) VALUES ('anna', ?)", (HASH,))
+        old = DatabaseService(db_path=path)
+        self.assertFalse(old.get_credentials("anna")["must_change"])
 
-        # Verify user exists
-        user = self.db_service.get_user("admin")
-        self.assertIsNotNone(user)
-        self.assertEqual(user["username"], "admin")
+    def test_unknown_user(self):
+        self.assertIsNone(self.db.get_credentials("nobody"))
+        self.assertFalse(self.db.delete_user("nobody"))
 
-    def test_create_user(self):
-        """Test creating a regular user."""
-        # Create admin first (not required by schema, but for consistency)
-        self.db_service.create_admin("admin", "admin123")
+    def test_deleting_a_user_removes_devices_pictures_and_tokens(self):
+        self.db.add_user("anna", HASH)
+        self.db.add_user("bernd", HASH)
+        mine = self.db.add_owned_device("anna", "nas", "192.168.1.10", "aa:bb:cc:dd:ee:01", PNG)
+        theirs = self.db.add_owned_device("bernd", "nas", "192.168.1.11", "aa:bb:cc:dd:ee:02")
+        self.db.set_user_picture("anna", *PNG)
+        self.db.create_refresh_token("anna", "t" * 64, 2**33)
 
-        # Create regular user
-        user_id, username = self.db_service.create_user("user", "password123")
+        self.assertTrue(self.db.delete_user("anna"))
 
-        self.assertEqual(user_id, 2)  # Second user
-        self.assertEqual(username, "user")
-
-        # Verify user exists
-        user = self.db_service.get_user("user")
-        self.assertIsNotNone(user)
-        self.assertEqual(user["username"], "user")
-
-    def test_get_user_not_found(self):
-        """Test getting a non-existent user."""
-        user = self.db_service.get_user("nonexistent")
-        self.assertIsNone(user)
-
-    def test_delete_user(self):
-        """Test deleting a user."""
-        # Create user
-        self.db_service.create_user("to_delete", "password")
-
-        # Verify user exists
-        user = self.db_service.get_user("to_delete")
-        self.assertIsNotNone(user)
-
-        # Delete user
-        result = self.db_service.delete_user("to_delete")
-        self.assertIs(result, True)
-
-        # Verify user is gone
-        user = self.db_service.get_user("to_delete")
-        self.assertIsNone(user)
-
-    def test_delete_user_not_found(self):
-        """Test deleting a non-existent user."""
-        result = self.db_service.delete_user("nonexistent")
-        self.assertIs(result, False)
-
-    def test_duplicate_username(self):
-        """Test that duplicate usernames are handled."""
-        self.db_service.create_user("user", "password1")
-
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.db_service.create_user("user", "password2")
+        self.assertIsNone(self.db.get_credentials("anna"))
+        self.assertEqual(self.rows("SELECT device_id FROM devices"), [(theirs["id"],)])
+        self.assertEqual(self.rows("SELECT * FROM device_pictures"), [])
+        self.assertEqual(self.rows("SELECT * FROM user_pictures"), [])
+        self.assertEqual(self.rows("SELECT * FROM refresh_tokens"), [])
+        self.assertIsNone(self.db.get_by_refresh_token("t" * 64))
+        self.assertNotEqual(mine["id"], theirs["id"])
 
 
-# =============================================================================
-# Device Tests
-# =============================================================================
+class TestOwnedDevices(DatabaseTestCase):
+    def setUp(self):
+        super().setUp()
+        self.db.add_user("anna", HASH)
+        self.db.add_user("bernd", HASH)
 
-class TestDeviceOperations(DatabaseTestCase):
-    """Tests for device-related operations."""
+    def test_a_device_belongs_to_one_owner(self):
+        device = self.db.add_owned_device("anna", "nas", "192.168.1.10", "aa:bb:cc:dd:ee:01")
+        self.assertEqual(self.db.list_owned_devices("anna"), [device])
+        self.assertEqual(self.db.list_owned_devices("bernd"), [])
+        self.assertIsNone(self.db.get_owned_device("bernd", device["id"]))
+        self.assertFalse(self.db.delete_owned_device("bernd", device["id"]))
+        self.assertTrue(self.db.delete_owned_device("anna", device["id"]))
 
-    def test_create_device(self):
-        """Test creating a device."""
-        device_id, device_name = self.db_service.create_device("router1", "192.168.1.1")
+    def test_names_are_unique_per_owner(self):
+        self.db.add_owned_device("anna", "nas", "192.168.1.10", "aa:bb:cc:dd:ee:01")
+        with self.assertRaises(ValueError):
+            self.db.add_owned_device("anna", "nas", "192.168.1.11", "aa:bb:cc:dd:ee:02")
+        self.assertIsNotNone(self.db.add_owned_device("bernd", "nas", "192.168.1.11", "aa:bb:cc:dd:ee:02"))
+        self.assertIsNone(self.db.add_owned_device("nobody", "nas", "192.168.1.11", "aa:bb:cc:dd:ee:02"))
 
-        self.assertEqual(device_id, 1)
-        self.assertEqual(device_name, "router1")
+    def test_an_edit_changes_the_fields_and_keeps_the_picture(self):
+        device = self.db.add_owned_device("anna", "nas", "192.168.1.10", "aa:bb:cc:dd:ee:01", PNG)
+        other = self.db.add_owned_device("anna", "pc", "192.168.1.11", "aa:bb:cc:dd:ee:02")
+        changed = self.db.update_owned_device("anna", device["id"], "nas2", "10.0.0.5", "aa:bb:cc:dd:ee:09")
+        self.assertEqual(changed, {**device, "name": "nas2", "address": "10.0.0.5", "mac": "aa:bb:cc:dd:ee:09"})
+        self.assertEqual(self.db.get_device_picture("anna", device["id"])["version"], device["picture"])
+        self.assertEqual(self.db.get_owned_device("anna", other["id"]), other)
 
-        # Verify device exists
-        device = self.db_service.get_device_by_name("router1")
-        self.assertIsNotNone(device)
-        self.assertEqual(device["devicename"], "router1")
-        self.assertEqual(device["device_address"], "192.168.1.1")
+    def test_an_edit_may_keep_the_own_name_but_not_take_another(self):
+        device = self.db.add_owned_device("anna", "nas", "192.168.1.10", "aa:bb:cc:dd:ee:01")
+        self.db.add_owned_device("anna", "pc", "192.168.1.11", "aa:bb:cc:dd:ee:02")
+        self.assertEqual(
+            self.db.update_owned_device("anna", device["id"], "nas", "10.0.0.5", "aa:bb:cc:dd:ee:01")["address"],
+            "10.0.0.5")
+        with self.assertRaises(ValueError):
+            self.db.update_owned_device("anna", device["id"], "pc", "10.0.0.5", "aa:bb:cc:dd:ee:01")
 
-    def test_get_device_not_found(self):
-        """Test getting a non-existent device."""
-        device = self.db_service.get_device_by_name("nonexistent")
-        self.assertIsNone(device)
+    def test_an_edit_of_somebody_elses_or_an_unknown_device_changes_nothing(self):
+        device = self.db.add_owned_device("anna", "nas", "192.168.1.10", "aa:bb:cc:dd:ee:01")
+        self.assertIsNone(self.db.update_owned_device("bernd", device["id"], "x", "10.0.0.5", "aa:bb:cc:dd:ee:09"))
+        self.assertIsNone(self.db.update_owned_device("anna", 9999, "x", "10.0.0.5", "aa:bb:cc:dd:ee:09"))
+        self.assertEqual(self.db.get_owned_device("anna", device["id"]), device)
 
-    def test_delete_device(self):
-        """Test deleting a device."""
-        # Create device
-        self.db_service.create_device("router1", "192.168.1.1")
-
-        # Verify device exists
-        device = self.db_service.get_device_by_name("router1")
-        self.assertIsNotNone(device)
-
-        # Delete device
-        result = self.db_service.delete_device("router1")
-        self.assertIs(result, True)
-
-        # Verify device is gone
-        device = self.db_service.get_device_by_name("router1")
-        self.assertIsNone(device)
-
-    def test_delete_device_not_found(self):
-        """Test deleting a non-existent device."""
-        result = self.db_service.delete_device("nonexistent")
-        self.assertIs(result, False)
-
-
-# =============================================================================
-# Connection Tests
-# =============================================================================
-
-class TestConnectionOperations(DatabaseTestCase):
-    """Tests for connection (user-device mapping) operations."""
-
-    def test_create_connection(self):
-        """Test creating a connection between user and device."""
-        # Create user and device
-        self.db_service.create_user("user1", "password")
-        self.db_service.create_device("device1", "192.168.1.1")
-
-        # Create connection
-        result = self.db_service.create_connection("user1", "device1")
-        self.assertIs(result, True)
-
-        # Verify connection exists
-        devices = self.db_service.get_devices_by_user("user1")
-        self.assertEqual(len(devices), 1)
-        self.assertEqual(devices[0]["devicename"], "device1")
-
-    def test_create_connection_user_not_found(self):
-        """Test creating a connection with non-existent user."""
-        self.db_service.create_device("device1", "192.168.1.1")
-
-        result = self.db_service.create_connection("nonexistent", "device1")
-        self.assertIs(result, False)
-
-    def test_create_connection_device_not_found(self):
-        """Test creating a connection with non-existent device."""
-        self.db_service.create_user("user1", "password")
-
-        result = self.db_service.create_connection("user1", "nonexistent")
-        self.assertIs(result, False)
-
-    def test_create_duplicate_connection(self):
-        """Test creating a duplicate connection."""
-        self.db_service.create_user("user1", "password")
-        self.db_service.create_device("device1", "192.168.1.1")
-
-        # First connection
-        result1 = self.db_service.create_connection("user1", "device1")
-        self.assertIs(result1, True)
-
-        # Duplicate connection
-        result2 = self.db_service.create_connection("user1", "device1")
-        self.assertIs(result2, False)  # Should return False for duplicate
-
-    def test_delete_connection(self):
-        """Test deleting a connection."""
-        self.db_service.create_user("user1", "password")
-        self.db_service.create_device("device1", "192.168.1.1")
-        self.db_service.create_connection("user1", "device1")
-
-        # Verify connection exists
-        devices = self.db_service.get_devices_by_user("user1")
-        self.assertEqual(len(devices), 1)
-
-        # Delete connection
-        result = self.db_service.delete_connection("user1", "device1")
-        self.assertIs(result, True)
-
-        # Verify connection is gone
-        devices = self.db_service.get_devices_by_user("user1")
-        self.assertEqual(len(devices), 0)
-
-    def test_delete_connection_not_found(self):
-        """Test deleting a non-existent connection."""
-        result = self.db_service.delete_connection("nonexistent", "device")
-        self.assertIs(result, False)
-
-    def test_get_devices_by_user(self):
-        """Test getting all devices for a user."""
-        self.db_service.create_user("user1", "password")
-        self.db_service.create_device("device1", "192.168.1.1")
-        self.db_service.create_device("device2", "192.168.1.2")
-        self.db_service.create_connection("user1", "device1")
-        self.db_service.create_connection("user1", "device2")
-
-        devices = self.db_service.get_devices_by_user("user1")
-        self.assertEqual(len(devices), 2)
-
-    def test_get_devices_by_nonexistent_user(self):
-        """Test getting devices for a non-existent user."""
-        devices = self.db_service.get_devices_by_user("nonexistent")
-        self.assertEqual(len(devices), 0)
-
-
-# =============================================================================
-# Schema Tests
-# =============================================================================
 
 class TestSchemaInitialization(DatabaseTestCase):
-    """Tests for database schema initialization."""
-
     def _columns(self, table):
-        with sqlite3.connect(self.temp_db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"PRAGMA table_info({table})")
-            columns = {row[1]: row[2] for row in cursor.fetchall()}
-        conn.close()
-        return columns
+        return {row[1]: row[2] for row in self.rows(f"PRAGMA table_info({table})")}
 
     def test_schema_created(self):
-        """Test that schema is created correctly."""
-        with sqlite3.connect(self.temp_db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = [row[0] for row in cursor.fetchall()]
-        conn.close()
-
-        self.assertIn("users", tables)
-        self.assertIn("devices", tables)
-        self.assertIn("mapping", tables)
+        tables = [row[0] for row in self.rows("SELECT name FROM sqlite_master WHERE type='table'")]
+        for name in ("users", "devices", "mapping", "bootstrap", "refresh_tokens", "reset_tokens",
+                     "device_pictures", "user_pictures"):
+            self.assertIn(name, tables)
 
     def test_users_table_structure(self):
-        """Test users table has correct columns."""
-        columns = self._columns("users")
-
-        self.assertIn("user_id", columns)
-        self.assertIn("username", columns)
-        self.assertIn("password", columns)
-        self.assertIn("created_at", columns)
+        for column in ("user_id", "username", "password", "is_admin", "created_at"):
+            self.assertIn(column, self._columns("users"))
 
     def test_devices_table_structure(self):
-        """Test devices table has correct columns."""
-        columns = self._columns("devices")
-
-        self.assertIn("device_id", columns)
-        self.assertIn("devicename", columns)
-        self.assertIn("device_address", columns)
-        self.assertIn("created_at", columns)
+        for column in ("device_id", "devicename", "device_address", "mac", "created_at"):
+            self.assertIn(column, self._columns("devices"))
 
     def test_mapping_table_structure(self):
-        """Test mapping table has correct columns."""
-        columns = self._columns("mapping")
-
-        self.assertIn("user_id", columns)
-        self.assertIn("device_id", columns)
-
-
-# =============================================================================
-# Integration Tests
-# =============================================================================
-
-class TestIntegration(DatabaseTestCase):
-    """Integration tests for complex scenarios."""
-
-    def test_full_workflow(self):
-        """Test a complete workflow: user + device + connection."""
-        # Create admin
-        admin_id, admin_name = self.db_service.create_admin("admin", "admin123")
-        self.assertEqual(admin_id, 1)
-
-        # Create user
-        user_id, user_name = self.db_service.create_user("user", "user123")
-        self.assertEqual(user_id, 2)
-
-        # Create devices
-        device1_id, device1_name = self.db_service.create_device("device1", "10.0.0.1")
-        device2_id, device2_name = self.db_service.create_device("device2", "10.0.0.2")
-        self.assertEqual(device1_id, 1)
-        self.assertEqual(device2_id, 2)
-
-        # Connect user to devices
-        self.assertIs(self.db_service.create_connection("user", "device1"), True)
-        self.assertIs(self.db_service.create_connection("user", "device2"), True)
-
-        # Verify user has 2 devices
-        devices = self.db_service.get_devices_by_user("user")
-        self.assertEqual(len(devices), 2)
-
-        # Delete one connection
-        self.assertIs(self.db_service.delete_connection("user", "device1"), True)
-
-        # Verify user has 1 device left
-        devices = self.db_service.get_devices_by_user("user")
-        self.assertEqual(len(devices), 1)
-        self.assertEqual(devices[0]["devicename"], "device2")
-
-        # Cleanup
-        self.assertIs(self.db_service.delete_user("user"), True)
-        # Note: ON DELETE CASCADE deletes mappings, but NOT devices themselves
-        # So devices still exist and can be deleted
-        self.assertIs(self.db_service.delete_device("device1"), True)
-        self.assertIs(self.db_service.delete_device("device2"), True)
+        for column in ("user_id", "device_id"):
+            self.assertIn(column, self._columns("mapping"))
 
 
 if __name__ == "__main__":

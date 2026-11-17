@@ -27,3 +27,9 @@ updates:
     target-branch: "dev"
     schedule:
       interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/src/database/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"

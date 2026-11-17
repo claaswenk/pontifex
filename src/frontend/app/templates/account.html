@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import picture_field %}
 {% block title %}Account{% endblock %}
 
 {% block content %}
@@ -8,7 +9,6 @@
 <div class="grid">
   <section class="panel" aria-labelledby="profile-title">
     <h2 id="profile-title">Profile</h2>
-    <span class="avatar avatar--large avatar--{{ account.role }}" aria-hidden="true">{{ account.username[:1] | upper }}</span>
     <dl class="facts">
       <dt>Username</dt>
       <dd>{{ account.username }}</dd>
@@ -17,6 +17,24 @@
       <dt>Devices</dt>
       <dd>{% if account.device_count is not none %}{{ account.device_count }}{% else %}-{% endif %}</dd>
     </dl>
+    <form method="post" action="{{ url_for('set_account_picture') }}" class="form" enctype="multipart/form-data" data-enhance>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% call picture_field("Profile picture") %}
+      {% if user.picture is not none %}
+      <img class="avatar avatar--large pic-pick__img" src="{{ url_for('account_picture', v=user.picture) }}" width="72" height="72" alt="Your picture">
+      {% else %}
+      <span class="avatar avatar--large avatar--{{ account.role }}" aria-hidden="true">{{ account.username[:1] | upper }}</span>
+      {% endif %}
+      {% endcall %}
+      <button type="submit" class="button">Save picture</button>
+    </form>
+    {% if user.picture is not none %}
+    <form method="post" action="{{ url_for('delete_account_picture') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button button--danger">Remove picture</button>
+    </form>
+    {% endif %}
+    <p class="hint">PNG, JPEG or WebP, at most 200 KB.</p>
   </section>
 
   <section class="panel" aria-labelledby="password-title">
@@ -24,11 +42,11 @@
     <form method="post" action="{{ url_for('change_password') }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label for="current_password">Current password</label>
-      <input id="current_password" name="current_password" type="password" autocomplete="current-password" maxlength="1024" required>
+      <input id="current_password" name="current_password" type="password" autocomplete="current-password" maxlength="1024"{% if form.invalid('current_password') %} aria-invalid="true"{% endif %} required>
       <label for="new_password">New password</label>
-      <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+      <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="1024"{% if form.invalid('new_password') %} aria-invalid="true"{% endif %} required>
       <label for="new_password_confirm">Repeat new password</label>
-      <input id="new_password_confirm" name="new_password_confirm" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+      <input id="new_password_confirm" name="new_password_confirm" type="password" autocomplete="new-password" minlength="12" maxlength="1024"{% if form.invalid('new_password_confirm') %} aria-invalid="true"{% endif %} required>
       <button type="submit" class="button">Change password</button>
     </form>
     <p class="hint">At least 12 characters. All your other sessions are signed out.</p>

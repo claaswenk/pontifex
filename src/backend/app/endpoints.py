@@ -1,52 +1,56 @@
 import logging
-import re
 
 from flask import Blueprint, jsonify, request, g
 from app.auth import BackendAuth, BootstrapConsumedError
 from app.services import (
-    ADDRESS_RULE,
-    MAC_RULE,
     MAX_DEVICES_PER_USER,
-    NAME_RULE,
     LoginThrottled,
     WakeUnavailableError,
     check_devices,
-    normalize_mac,
-    process_pontifex_logic,
     request_wake,
     system_stats,
-    valid_address,
-    valid_name,
 )
+from shared.input_validator import InputValidator as V, InvalidInput
 
 logger = logging.getLogger(__name__)
 
-MAX_USERNAME_LENGTH = 64
-MAX_PASSWORD_LENGTH = 1024
-MIN_PASSWORD_LENGTH = 12
-MAX_RESET_TOKEN_LENGTH = 128
-
-# Lower case only, so "Anna" and "anna" cannot be two accounts; the character
-# set also keeps the name safe to use as a URL path segment.
-USERNAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{2,63}")
-USERNAME_RULE = "Username must be 3-64 characters: lower case letters, digits, '.', '_' or '-'."
-PASSWORD_RULE = f"Password must be {MIN_PASSWORD_LENGTH}-{MAX_PASSWORD_LENGTH} characters."
+# Every value from a request goes through shared.input_validator first; the
+# handlers below only use what it returns. A refused value ends in the
+# handler at the bottom of create_api_blueprint (400 with the rule), unless
+# the route needs a different answer (login: always the same 401).
 
 
-def _normalized_username(value) -> str | None:
-    """The canonical form of a username, or None if it is not a valid one."""
-    if not isinstance(value, str):
+def _body(required: bool = False) -> dict:
+    """The JSON body as a dict. A body that is not an object is refused."""
+    data = request.get_json(silent=True)
+    if data is None and required:
+        raise InvalidInput("body", V.BODY_RULE)
+    return V.json_object(data)
+
+
+def _current_password(data: dict) -> str | None:
+    """The password sent as proof, or None if it is unusable (answered like a wrong one)."""
+    try:
+        return V.current_password(data.get("current_password"))
+    except InvalidInput:
         return None
-    name = value.strip().lower()
-    return name if USERNAME_PATTERN.fullmatch(name) else None
 
 
-def _valid_new_password(value) -> bool:
-    return isinstance(value, str) and MIN_PASSWORD_LENGTH <= len(value) <= MAX_PASSWORD_LENGTH
+def _known_username(value) -> str | None:
+    """A username from the URL in canonical form, or None (answered like an unknown user)."""
+    try:
+        return V.path_username(value)
+    except InvalidInput:
+        return None
 
 
 def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     api_bp = Blueprint("api", __name__)
+
+    @api_bp.errorhandler(InvalidInput)
+    def refused_input(exc):
+        # "field" names the refused input, so a form can mark it.
+        return jsonify({"error": exc.message, "field": exc.field}), 400
 
     # -----------------------------------------------------------------------
     # Health  (public, no auth required)
@@ -100,19 +104,15 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
 
     @api_bp.route("/login", methods=["POST"])
     def login():
-        data = request.get_json(silent=True) or {}
-        username = data.get("username")
-        password = data.get("password")
-
-        if (
-            not isinstance(username, str) or not isinstance(password, str)
-            or not username.strip() or not password
-            or len(username) > MAX_USERNAME_LENGTH or len(password) > MAX_PASSWORD_LENGTH
-        ):
+        try:
+            data = _body()
+            username = V.username(data.get("username"))
+            password = V.current_password(data.get("password"), "password")
+        except InvalidInput:
             return jsonify({"error": "Invalid username or password."}), 401
 
         try:
-            result = auth.login(username.strip().lower(), password, request.remote_addr or "unknown")
+            result = auth.login(username, password, request.remote_addr or "unknown")
         except LoginThrottled as exc:
             logger.warning("Login throttled")
             response = jsonify({"error": "Too many failed attempts. Try again later."})
@@ -122,12 +122,13 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         if result is None:
             return jsonify({"error": "Invalid username or password."}), 401
 
-        refresh_token, access_token, role = result
+        refresh_token, access_token, role, must_change = result
         return jsonify({
             "refresh_token": refresh_token,
             "access_token":  access_token,
             "expires_in":    300,
             "role":          role,
+            "must_change_password": must_change,
         }), 200
 
     # -----------------------------------------------------------------------
@@ -136,10 +137,7 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
 
     @api_bp.route("/logout", methods=["POST"])
     def logout():
-        data = request.get_json(silent=True) or {}
-        refresh_token = data.get("refresh_token")
-        if not isinstance(refresh_token, str) or not refresh_token:
-            return jsonify({"error": "Field 'refresh_token' is required."}), 400
+        refresh_token = V.token(_body().get("refresh_token"), "refresh_token")
         auth.logout(refresh_token)
         return jsonify({"status": "ok"}), 200
 
@@ -148,12 +146,14 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     # -----------------------------------------------------------------------
 
     @api_bp.route("/me", methods=["GET"])
-    @auth.require_role("admin", "user")
+    @auth.require_role("admin", "user", allow_password_change=True)
     def me():
         return jsonify({
             "username": g.current_user["sub"],
             "role":     g.current_user["role"],
             "token_expires_at": g.current_user["exp"],
+            "picture":  auth.database.get_user_picture_version(g.current_user["sub"]),
+            "must_change_password": g.password_change_pending,
         }), 200
 
     # -----------------------------------------------------------------------
@@ -162,11 +162,14 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
 
     @api_bp.route("/token", methods=["POST"])
     def get_access_token():
-        data = request.get_json(silent=True) or {}
-        refresh_token = data.get("refresh_token", "")
-
-        if not refresh_token:
+        data = _body()
+        if not data.get("refresh_token"):
             return jsonify({"error": "Field 'refresh_token' is required."}), 400
+
+        try:
+            refresh_token = V.token(data["refresh_token"], "refresh_token")
+        except InvalidInput:  # cannot be one of ours: answered like an unknown token
+            return jsonify({"error": "Unauthorized: unknown refresh token."}), 401
 
         access_token = auth.exchange_refresh_token(refresh_token)
         if access_token is None:
@@ -175,31 +178,15 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         return jsonify({"access_token": access_token, "expires_in": 300}), 200
 
     # -----------------------------------------------------------------------
-    # Process (existing stub - requires a valid access token)
-    # -----------------------------------------------------------------------
-
-    @api_bp.route("/process", methods=["POST"])
-    @auth.require_role("admin", "user")
-    def process_data():
-        result = process_pontifex_logic()
-        return jsonify({"success": True, "data": result}), 200
-
-    # -----------------------------------------------------------------------
     # POST /api/create-user/admin
     # -----------------------------------------------------------------------
 
     @api_bp.route("/create-user/admin", methods=["POST"])
     @auth.require_initial_api_key
     def create_admin_user():
-        data = request.get_json(silent=True) or {}
-
-        username = _normalized_username(data.get("username"))
-        password = data.get("password")
-
-        if username is None:
-            return jsonify({"error": USERNAME_RULE}), 400
-        if not _valid_new_password(password):
-            return jsonify({"error": PASSWORD_RULE}), 400
+        data = _body()
+        username = V.username(data.get("username"))
+        password = V.new_password(data.get("password"))
 
         try:
             refresh_token, access_token = auth.create_bootstrap_admin(username, password)
@@ -229,34 +216,27 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     @api_bp.route("/users", methods=["POST"])
     @auth.require_role("admin")
     def create_user():
-        data = request.get_json(silent=True) or {}
-        username = _normalized_username(data.get("username"))
-        password = data.get("password")
-
-        if username is None:
-            return jsonify({"error": USERNAME_RULE}), 400
-        if not _valid_new_password(password):
-            return jsonify({"error": PASSWORD_RULE}), 400
+        data = _body()
+        username = V.username(data.get("username"))
+        password = V.new_password(data.get("password"))
 
         try:
             auth.create_user(username, password)
         except ValueError:
-            return jsonify({"error": "Unable to create user with the provided input."}), 409
+            return jsonify({"error": "Unable to create user with the provided input.",
+                            "field": "username"}), 409
 
         return jsonify({"username": username, "role": "user"}), 201
 
     @api_bp.route("/users/<username>", methods=["PUT"])
     @auth.require_role("admin")
     def reset_user_password(username):
-        data = request.get_json(silent=True) or {}
-        password = data.get("password")
-
-        if _normalized_username(username) != username:
+        username = _known_username(username)
+        if username is None:
             return jsonify({"error": "User not found."}), 404
         if username == g.current_user["sub"]:
             return jsonify({"error": "Use PUT /api/me/password to change your own password."}), 409
-        if not _valid_new_password(password):
-            return jsonify({"error": PASSWORD_RULE}), 400
+        password = V.new_password(_body().get("password"))
 
         if not auth.set_password(username, password):
             return jsonify({"error": "User not found."}), 404
@@ -272,7 +252,8 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     @api_bp.route("/users/<username>/reset-token", methods=["POST"])
     @auth.require_role("admin")
     def issue_reset_token(username):
-        if _normalized_username(username) != username:
+        username = _known_username(username)
+        if username is None:
             return jsonify({"error": "User not found."}), 404
         if username == g.current_user["sub"]:
             return jsonify({"error": "Use PUT /api/me/password to change your own password."}), 409
@@ -291,14 +272,12 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
 
     @api_bp.route("/reset-password", methods=["POST"])
     def reset_password():
-        data = request.get_json(silent=True) or {}
-        token = data.get("reset_token")
-        new = data.get("new_password")
-
-        if not isinstance(token, str) or not token or len(token) > MAX_RESET_TOKEN_LENGTH:
+        data = _body()
+        try:
+            token = V.token(data.get("reset_token"), "reset_token")
+        except InvalidInput:
             return jsonify({"error": "Invalid or expired reset token."}), 401
-        if not _valid_new_password(new):
-            return jsonify({"error": PASSWORD_RULE}), 400
+        new = V.new_password(data.get("new_password"), "new_password")
 
         try:
             done = auth.reset_password_with_token(token, new, request.remote_addr or "unknown")
@@ -315,7 +294,8 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     @api_bp.route("/users/<username>", methods=["DELETE"])
     @auth.require_role("admin")
     def delete_user(username):
-        if _normalized_username(username) != username:
+        username = _known_username(username)
+        if username is None:
             return jsonify({"error": "User not found."}), 404
         if username == g.current_user["sub"]:
             return jsonify({"error": "You cannot delete your own account."}), 409
@@ -333,19 +313,18 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     # -----------------------------------------------------------------------
     # PUT /api/me/password  (any signed-in user, needs the current password)
     # Revokes all refresh tokens, so a fresh pair is returned to stay signed in.
+    # The only write that is open to an account whose password the admin chose:
+    # until it is replaced, every other route answers 403 password_change_required.
     # -----------------------------------------------------------------------
 
     @api_bp.route("/me/password", methods=["PUT"])
-    @auth.require_role("admin", "user")
+    @auth.require_role("admin", "user", allow_password_change=True)
     def change_own_password():
-        data = request.get_json(silent=True) or {}
-        current = data.get("current_password")
-        new = data.get("new_password")
-
-        if not isinstance(current, str) or not current or len(current) > MAX_PASSWORD_LENGTH:
+        data = _body()
+        current = _current_password(data)
+        if current is None:
             return jsonify({"error": "Current password is wrong."}), 403
-        if not _valid_new_password(new):
-            return jsonify({"error": PASSWORD_RULE}), 400
+        new = V.new_password(data.get("new_password"), "new_password")
 
         try:
             tokens = auth.change_own_password(
@@ -356,6 +335,9 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
             response = jsonify({"error": "Too many failed attempts. Try again later."})
             response.headers["Retry-After"] = str(exc.retry_after)
             return response, 429
+        except ValueError:
+            return jsonify({"error": "The new password must differ from the temporary one.",
+                            "field": "new_password"}), 400
 
         if tokens is None:
             return jsonify({"error": "Current password is wrong."}), 403
@@ -376,9 +358,7 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     @api_bp.route("/me", methods=["PATCH"])
     @auth.require_role("admin", "user")
     def update_own_account():
-        data = request.get_json(silent=True)
-        if not isinstance(data, dict):
-            return jsonify({"error": "A JSON object is required."}), 400
+        data = _body(required=True)
 
         if "role" in data:
             return jsonify({"error": "The role cannot be changed."}), 403
@@ -388,12 +368,10 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         if "username" not in data:
             return jsonify({"error": "Field 'username' is required."}), 400
 
-        new_username = _normalized_username(data.get("username"))
-        if new_username is None:
-            return jsonify({"error": USERNAME_RULE}), 400
+        new_username = V.username(data.get("username"))
 
-        current = data.get("current_password")
-        if not isinstance(current, str) or not current or len(current) > MAX_PASSWORD_LENGTH:
+        current = _current_password(data)
+        if current is None:
             return jsonify({"error": "Current password is wrong."}), 403
 
         try:
@@ -432,10 +410,8 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
         if g.current_user.get("role") == "admin":
             return jsonify({"error": "The admin account cannot be deleted."}), 409
 
-        data = request.get_json(silent=True) or {}
-        current = data.get("current_password")
-
-        if not isinstance(current, str) or not current or len(current) > MAX_PASSWORD_LENGTH:
+        current = _current_password(_body())
+        if current is None:
             return jsonify({"error": "Current password is wrong."}), 403
 
         try:
@@ -465,35 +441,134 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     @api_bp.route("/devices", methods=["POST"])
     @auth.require_role("admin", "user")
     def create_device():
-        data = request.get_json(silent=True) or {}
+        data = _body()
         owner = g.current_user["sub"]
 
-        name = valid_name(data.get("name"))
-        address = valid_address(data.get("address"))
-        mac = normalize_mac(data.get("mac"))
-
-        if name is None:
-            return jsonify({"error": NAME_RULE}), 400
-        if address is None:
-            return jsonify({"error": ADDRESS_RULE}), 400
-        if mac is None:
-            return jsonify({"error": MAC_RULE}), 400
+        name = V.device_name(data.get("name"))
+        address = V.address(data.get("address"))
+        mac = V.mac(data.get("mac"))
+        image = data.get("image")
+        if image is not None:
+            V.image(image)  # refused here with the rule; the database checks the bytes again
 
         if len(auth.database.list_devices(owner)) >= MAX_DEVICES_PER_USER:
             return jsonify({"error": f"At most {MAX_DEVICES_PER_USER} devices are allowed."}), 409
 
         try:
-            device = auth.database.create_device(owner, name, address, mac)
+            device = auth.database.create_device(owner, name, address, mac, image)
         except ValueError:
-            return jsonify({"error": "You already have a device with this name."}), 409
+            return jsonify({"error": "You already have a device with this name.",
+                            "field": "name"}), 409
         return jsonify(device), 201
+
+    @api_bp.route("/devices/<int:device_id>", methods=["GET"])
+    @auth.require_role("admin", "user")
+    def get_device(device_id):
+        try:
+            device_id = V.device_id(device_id)
+        except InvalidInput:
+            return jsonify({"error": "Device not found."}), 404
+        device = auth.database.get_device(g.current_user["sub"], device_id)
+        if device is None:
+            return jsonify({"error": "Device not found."}), 404
+        return jsonify(device), 200
+
+    @api_bp.route("/devices/<int:device_id>", methods=["PUT"])
+    @auth.require_role("admin", "user")
+    def update_device(device_id):
+        try:
+            device_id = V.device_id(device_id)
+        except InvalidInput:
+            return jsonify({"error": "Device not found."}), 404
+        data = _body(required=True)
+        name = V.device_name(data.get("name"))
+        address = V.address(data.get("address"))
+        mac = V.mac(data.get("mac"))
+        try:
+            device = auth.database.update_device(g.current_user["sub"], device_id, name, address, mac)
+        except ValueError:
+            return jsonify({"error": "You already have a device with this name.",
+                            "field": "name"}), 409
+        if device is None:
+            return jsonify({"error": "Device not found."}), 404
+        return jsonify(device), 200
 
     @api_bp.route("/devices/<int:device_id>", methods=["DELETE"])
     @auth.require_role("admin", "user")
     def delete_device(device_id):
+        try:
+            device_id = V.device_id(device_id)
+        except InvalidInput:
+            return jsonify({"error": "Device not found."}), 404
         if not auth.database.delete_device(g.current_user["sub"], device_id):
             return jsonify({"error": "Device not found."}), 404
         return jsonify({"id": device_id}), 200
+
+    # -----------------------------------------------------------------------
+    # Pictures: GET answers {"media_type", "image" (base64), "version"}.
+    # A device of somebody else is reported like one that does not exist.
+    # -----------------------------------------------------------------------
+
+    def _device_id_or_none(device_id):
+        try:
+            return V.device_id(device_id)
+        except InvalidInput:
+            return None
+
+    @api_bp.route("/devices/<int:device_id>/picture", methods=["GET"])
+    @auth.require_role("admin", "user")
+    def get_device_picture(device_id):
+        device_id = _device_id_or_none(device_id)
+        picture = None if device_id is None else auth.database.get_device_picture(
+            g.current_user["sub"], device_id)
+        if picture is None:
+            return jsonify({"error": "Picture not found."}), 404
+        return jsonify(picture), 200
+
+    @api_bp.route("/devices/<int:device_id>/picture", methods=["PUT"])
+    @auth.require_role("admin", "user")
+    def set_device_picture(device_id):
+        device_id = _device_id_or_none(device_id)
+        image = _body(required=True).get("image")
+        V.image(image)
+        version = None if device_id is None else auth.database.set_device_picture(
+            g.current_user["sub"], device_id, image)
+        if version is None:
+            return jsonify({"error": "Device not found."}), 404
+        return jsonify({"id": device_id, "picture": version}), 200
+
+    @api_bp.route("/devices/<int:device_id>/picture", methods=["DELETE"])
+    @auth.require_role("admin", "user")
+    def delete_device_picture(device_id):
+        device_id = _device_id_or_none(device_id)
+        if device_id is None or not auth.database.delete_device_picture(g.current_user["sub"], device_id):
+            return jsonify({"error": "Picture not found."}), 404
+        return jsonify({"id": device_id}), 200
+
+    @api_bp.route("/me/picture", methods=["GET"])
+    @auth.require_role("admin", "user")
+    def get_own_picture():
+        picture = auth.database.get_user_picture(g.current_user["sub"])
+        if picture is None:
+            return jsonify({"error": "Picture not found."}), 404
+        return jsonify(picture), 200
+
+    @api_bp.route("/me/picture", methods=["PUT"])
+    @auth.require_role("admin", "user")
+    def set_own_picture():
+        image = _body(required=True).get("image")
+        V.image(image)
+        version = auth.database.set_user_picture(g.current_user["sub"], image)
+        if version is None:
+            return jsonify({"error": "User not found."}), 404
+        return jsonify({"picture": version}), 200
+
+    @api_bp.route("/me/picture", methods=["DELETE"])
+    @auth.require_role("admin", "user")
+    def delete_own_picture():
+        if not auth.database.delete_user_picture(g.current_user["sub"]):
+            return jsonify({"error": "Picture not found."}), 404
+        return jsonify({"status": "ok"}), 200
 
     # -----------------------------------------------------------------------
     # POST /api/devices/<id>/wake
@@ -504,6 +579,10 @@ def create_api_blueprint(auth: BackendAuth) -> Blueprint:
     @api_bp.route("/devices/<int:device_id>/wake", methods=["POST"])
     @auth.require_role("admin", "user")
     def wake_device(device_id):
+        try:
+            device_id = V.device_id(device_id)
+        except InvalidInput:
+            return jsonify({"error": "Device not found."}), 404
         device = auth.database.get_device(g.current_user["sub"], device_id)
         if device is None:
             return jsonify({"error": "Device not found."}), 404
