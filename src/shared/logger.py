@@ -39,6 +39,7 @@ class BaseLogger:
         self._file_handler: Optional[logging.Handler] = None
         self._logger = logging.getLogger(f"pontifex.{self.CONTAINER_ID or 'generic'}")
         self._logger.setLevel(logging.INFO)
+        self._logger.propagate = False
         self._setup_file_handler()
 
     def _resolve_log_path(self) -> Optional[str]:
@@ -69,6 +70,11 @@ class BaseLogger:
                     os.chmod(self._log_path, self.FILE_PERMISSIONS)
                 except OSError:
                     pass
+
+            abs_log_path = os.path.abspath(self._log_path)
+            for h in list(self._logger.handlers):
+                if isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == abs_log_path:
+                    self._logger.removeHandler(h)
 
             handler = logging.FileHandler(self._log_path, encoding="utf-8")
             formatter = logging.Formatter(
@@ -142,6 +148,9 @@ class BaseLogger:
 
     def init_app(self, app: Flask) -> None:
         """Hook into Flask lifecycle to log every incoming request and exception."""
+        if getattr(app, "_pontifex_logger_initialized", False):
+            return
+        app._pontifex_logger_initialized = True
 
         @app.before_request
         def record_start_time():
