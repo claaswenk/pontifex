@@ -116,6 +116,20 @@ class BaseLoggerTest(unittest.TestCase):
         self.assertIn("GET /api/crash status=500", content)
         self.assertIn("[ip:10.0.0.3]", content)
 
+    def test_sanitization_of_control_characters_and_nul_bytes(self):
+        logger = BaseLogger(log_path=self.log_path)
+        logger.info("Attack with nul: \x00 and newline: \n and cr: \r", caller="user:\x00admin\n")
+        logger.flush()
+        logger.close()
+
+        with open(self.log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertNotIn("\x00", content)
+        self.assertIn(r"\x00", content)
+        self.assertIn(r"[user:\x00admin\n]", content)
+        self.assertIn(r"Attack with nul: \x00 and newline: \n and cr: \r", content)
+
     def test_container_logger_subclasses(self):
         frontend_log = os.path.join(self.tmp.name, "frontend.log")
         database_log = os.path.join(self.tmp.name, "database.log")

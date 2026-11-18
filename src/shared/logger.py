@@ -40,6 +40,8 @@ class BaseLogger:
         self._logger = logging.getLogger(f"pontifex.{self.CONTAINER_ID or 'generic'}")
         self._logger.setLevel(logging.INFO)
         self._logger.propagate = False
+        if not self._logger.handlers:
+            self._logger.addHandler(logging.NullHandler())
         self._setup_file_handler()
 
     def _resolve_log_path(self) -> Optional[str]:
@@ -126,9 +128,27 @@ class BaseLogger:
     # Logging methods
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _sanitize_text(text: Any) -> str:
+        """Escape control characters, newlines, carriage returns and NUL bytes."""
+        if not isinstance(text, str):
+            text = str(text)
+        sanitized = []
+        for ch in text:
+            code = ord(ch)
+            if ch in ("\r", "\n"):
+                sanitized.append("\\n" if ch == "\n" else "\\r")
+            elif code < 32 or (127 <= code <= 159):
+                sanitized.append(f"\\x{code:02x}")
+            else:
+                sanitized.append(ch)
+        return "".join(sanitized)
+
     def _format_msg(self, msg: str, caller: Optional[str] = None) -> str:
         identity = caller or self.get_caller_identity()
-        return f"[{identity}] {msg}"
+        clean_identity = self._sanitize_text(identity)
+        clean_msg = self._sanitize_text(msg)
+        return f"[{clean_identity}] {clean_msg}"
 
     def info(self, msg: str, *, caller: Optional[str] = None) -> None:
         self._logger.info(self._format_msg(msg, caller))
