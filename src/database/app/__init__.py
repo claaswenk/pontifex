@@ -7,7 +7,12 @@ def create_app():
 
     from app.auth import DatabaseAuth
     from app.endpoints import api_db
+    from app.logger import DatabaseLogger
     from app.services import get_db_service
+
+    logger = DatabaseLogger()
+    logger.init_app(app)
+    app.extensions["logger"] = logger
 
     auth = DatabaseAuth()
     auth.validate_config()
