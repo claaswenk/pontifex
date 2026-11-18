@@ -7,6 +7,11 @@ def create_app(database=None):
     from app.auth import BackendAuth
     from app.database_client import DatabaseClient, DatabaseUnavailableError
     from app.endpoints import create_api_blueprint
+    from app.logger import BackendLogger
+
+    logger = BackendLogger()
+    logger.init_app(app)
+    app.extensions["logger"] = logger
 
     client = database or DatabaseClient()
     auth = BackendAuth(client)
