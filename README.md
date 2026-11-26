@@ -15,6 +15,18 @@
 > Selected areas of specialization for the Security by Design lecture:
 > "1. Building von Artefakten" & "3. Build & Supply Chain".
 
+- [Overview](docs/overview.md)
+- [Architecture](docs/architecture.md)
+- [Authentication](docs/authentication.md)
+- [Container trust](docs/container-trust.md)
+- [Data model](docs/data-model.md)
+- [Wake-on-LAN](docs/wake-on-lan.md)
+- [Logging](docs/logging.md)
+- [Endpoints](docs/endpoints.md)
+- [API reference](docs/api.md)
+- [User guide](docs/guide-user.md)
+- [Administrator guide](docs/guide-admin.md)
+
 ## Quick start (Linux, Podman)
 
 ```bash
