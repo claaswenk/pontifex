@@ -8,8 +8,13 @@ def create_app(backend=None, sessions=None) -> Flask:
     app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
     from app.auth import FrontendAuth
+    from app.logger import FrontendLogger
     from app.pages import register_pages
     from app.services import BackendClient, SessionStore
+
+    logger = FrontendLogger()
+    logger.init_app(app)
+    app.extensions["logger"] = logger
 
     auth = FrontendAuth()
     auth.validate_config()

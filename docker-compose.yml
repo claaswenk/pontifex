@@ -53,6 +53,7 @@ services:
     volumes:
       - tls_certs:/app/certs
       - wake_socket:/run/pontifex
+      - backend_logs:/app/logs
     depends_on:
       - database
     networks:
@@ -80,6 +81,8 @@ services:
     environment:
       # Only the secret shared with the backend; no JWT secret, no frontend secret
       BACKEND_DATABASE_SECRET: ${BACKEND_DATABASE_SECRET}
+      # Where the database reaches the backend
+      BACKEND_URL: ${BACKEND_URL:-https://backend:7337}
       PORT: ${DATABASE_PORT:-13110}
       # SQLite database file path (inside the container)
       DB_PATH: ${DB_PATH:-/app/data/pontifex.db}
@@ -88,6 +91,7 @@ services:
     volumes:
       - database_tls_certs:/app/certs
       - sqlite_data:/app/data
+      - database_logs:/app/logs
     networks:
       - pontifex-net
 
@@ -146,6 +150,7 @@ services:
       TLS_EXTRA_SANS: ${TLS_EXTRA_SANS:-}
     volumes:
       - frontend_tls_certs:/app/certs
+      - frontend_logs:/app/logs
     networks:
       - pontifex-net
     healthcheck:
@@ -178,6 +183,16 @@ volumes:
 
   # Unix socket between backend and wake relay. Nothing but the socket is in it.
   wake_socket:
+    driver: local
+
+  # Isolated audit logs per container
+  backend_logs:
+    driver: local
+
+  database_logs:
+    driver: local
+
+  frontend_logs:
     driver: local
 
 # Networks
