@@ -253,6 +253,7 @@ jobs:
       - name: Generate SBOM (CycloneDX)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.76.2
           input: ${{ env.IMAGE_TAR }}
           format: cyclonedx
           output: sbom-${{ matrix.service }}.cdx.json
@@ -260,6 +261,7 @@ jobs:
       - name: Scan image for vulnerabilities (gate - fails on HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.76.2
           input: ${{ env.IMAGE_TAR }}
           format: table
           exit-code: "1"
