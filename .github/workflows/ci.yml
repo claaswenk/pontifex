@@ -256,7 +256,7 @@ jobs:
           for dist in md.distributions():
               name = (dist.metadata.get("Name") or "").lower()
               if name in wanted:
-                  print(f"{name}=={dist.version} at {dist.locate_file(\"\")}")
+                  print(f"{name}=={dist.version}")
           '
       - name: Export image as build artifact
         run: podman save --format docker-archive -o "${IMAGE_TAR}" "${IMAGE_NAME}:${GITHUB_SHA}"
