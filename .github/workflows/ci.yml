@@ -286,6 +286,8 @@ jobs:
           name: trivy-report-${{ matrix.service }}
           path: trivy-report.json
           if-no-files-found: warn
+          format: json
+          output: trivy-report.json
 
       - name: Verify container runs as non-root
         run: |
